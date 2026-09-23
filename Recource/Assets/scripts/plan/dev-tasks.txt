@@ -1,0 +1,123 @@
+﻿# DEV TASKS — "Recource"
+> How to use each code file + everything you must do to make the game playable.
+> Companion to `plan.txt` (master plan) and the GDD hub docs.
+
+---
+
+## 1. WHAT YOU HAVE (how to use each code file)
+
+All files live in `Assets/scripts/`. **You do NOT wire them together manually —
+`GameView` is the only script you need to attach in Unity. Everything else is
+plain logic classes it uses automatically.**
+
+| File | What it is | How you use it |
+|---|---|---|
+| `materials.cs` | `ResourceType` enum (8 resources: Wood, Metal, Energy, Water → Chips, Mechanical Parts, Building Materials, Food), `ModuleType` enum, `MaterialCatalog` (base prices, refining recipes, module build costs, price fluctuation rules) | You never touch it at runtime. To **change resources, recipes or base prices**, edit the arrays in `MaterialCatalog`. |
+| `Company.cs` | State of one company (you + 3 AI): inventory, Political Power (PP), tax state (extra tax %, payment priority order, failed taxes) | Internal data container. The player object is always `GameSimulator.Player`. |
+| `Node.cs` | One map node: what it produces, factory inputs, module slots, 2x multipliers, owner, position | Internal data container. One per hub on the map. |
+| `Market.cs` | Government prices in PP per unit; re-rolled every tax cycle (demand 0.75–1.5x, raw ±20%, refined ±50%, one random refined resource 2x "special") | Read-only from the UI (`sim.market.Price(r)`). To change the price formula, edit `Market.NewCycle()`. |
+| `GameConfig.cs` | **All tunable numbers** (tick speed, tax rate, penalties, node counts, starting power, node costs, AI behavior) | **This is your main balancing tool.** Attach it via the Inspector (see below) or edit the defaults in code. |
+| `GameSimulator.cs` | **The whole game logic**: `NewGame`, `DoTick`, `Produce`, `TaxTick`, `BuyGovernmentNode`, `BuyNode`, `BuyOutCompany`, `BuildModule`, `RequestTrade`, AI, win/lose | Attach as a component (or let `GameView` auto-create it). Public methods are the API — any UI or test can call them. |
+| `GameView.cs` | **Visual + UI layer**: builds the colored 3D node map, draws all IMGUI panels (top bar, your company, market, nodes, trade forms, log, game-over) | **The ONLY component you attach in the scene.** It auto-creates `GameSimulator` if none exists, auto-places the camera, and runs the whole game. |
+
+### How a tick flows (so the pieces make sense)
+```
+GameView.Update (via GameSimulator)
+  -> every config.TickSeconds: DoTick()
+      -> Produce(): every owned node adds output to inventory (factories consume inputs)
+      -> AIAct(): AI may buy a government node / request a trade
+      -> every TaxEveryTicks ticks: TaxTick()
+          -> market.NewCycle(): prices re-roll, new "special" resource
+          -> each company pays 30% (+ extra %) of produced value in resources
+             paid in the priority order the player set (AI: most valuable first)
+          -> paid fully -> +PP (extra portion worth 1.5x)  |  failed -> penalty +20%, 2 fails = bankrupt
+      -> CheckEnd(): win = own ALL nodes + all other companies gone
+```
+
+---
+
+## 2. MAKE THE GAME USABLE (do these in order)
+
+### Task 1 — Run it (5 minutes, proves the game works)
+- [ ] Open Unity, open **Assets/Scenes/SampleScene.unity**
+- [ ] Create an empty GameObject, name it `Game`
+- [ ] Add the **`GameView`** component to it (Add Component → GameView)
+  - That's it. `GameView.Awake` auto-creates `GameSimulator` and `Start` calls `NewGame()`.
+  - (Optional: add `GameSimulator` yourself and drag it into `GameView`'s `sim` field — not required.)
+- [ ] Press **Play**. You should see:
+  - a flat 5x4 map of colored areas (green = you, red/blue/yellow = AI, gray = government),
+  - cylinder = raw hub, cube = factory,
+  - IMGUI UI: top bar (tick counter, speed slider, TICK / TAX NOW / RESTART),
+    Your Company panel, Government Prices panel, Nodes panel, Trade form, Log.
+- [ ] Save the scene.
+
+### Task 2 — Play a full game (test loop)
+- [ ] Set the **Speed slider** to ~10s (top bar) so a game takes ~10–20 min.
+- [ ] Learn the loop:
+  1. Watch production fill your inventory each tick.
+  2. Before the tax tick, check **TAX DUE AT NEXT TICK** in Your Company panel.
+  3. Pay tax with resources (order set by the `<`/`>` priority list — put your most valuable/hardest-to-replace resources LAST).
+  4. Earn PP → **Buy** gray (government) nodes from the Nodes panel.
+  5. Save up refined resources → build **Speed 2x** / **Store 2x** modules on your nodes (5 slots each).
+  6. Use the **Trade** form when you're missing a resource (you must offer MORE PP value than you request).
+  7. Use **Buy...** on AI-owned nodes and the **Buy Out** form to eliminate rivals.
+- [ ] Win condition: own all 20 nodes and every other company gone.
+- [ ] Lose condition: fail the tax quota **twice in a row** → government seizes your company.
+
+### Task 3 — Balance pass (numbers in `GameConfig`, Inspector or code)
+Tune these until a win feels realistic in 10–60 min:
+- [ ] `TickSeconds` (default 60) — game speed.
+- [ ] `TaxRate` 0.30 / `PenaltyPerFail` 0.20 / `BankruptAtFails` 2 — tax pressure.
+- [ ] `StartingPoliticalPower` 400 — starting buy power (first gov node costs 100 PP, then +50% per node you own).
+- [ ] `NodeBaseValue` 100 / `NodeCostGrowth` 0.5 — how fast expansion gets expensive.
+- [ ] `BaseNodeProduction` 2 / `BaseCapacityPerResource` 20 — production vs storage vs tax quota.
+- [ ] `AIExpansionChance` 0.35 / `AITradeChance` 0.25 — AI aggressiveness.
+- [ ] Check `MaterialCatalog.BasePrices` + `Market` fluctuation if the economy feels broken.
+
+**Balance rule of thumb:** tax quota (30% of ~5-tick production) should be payable
+from inventory you *could have* built, and one tax cycle should roughly afford
+a fraction of a new node — so PP always has to be spent on buying, not just accumulating.
+
+### Task 4 — Polish (Phase 4 of plan.txt)
+- [ ] Clearer feedback: status line already shows errors; add toasts / colors on success.
+- [ ] Per-node detail panel (currently the list row shows it all).
+- [ ] Optional: player-initiated buyout offers vs AI (BuyOut form already exists), more module types.
+- [ ] GDD cleanup: put the final numbers into the four plan docs and `[[link]]` each one to its code class.
+
+---
+
+## 3. QUICK REFERENCE (cheat sheet while coding)
+
+```csharp
+// Get the simulation from anywhere:
+GameSimulator sim = GameObject.FindObjectOfType<GameSimulator>();
+
+// Player state:
+Company me = sim.Player;
+float pp       = me.PoliticalPower;
+float wood     = me.GetInventory(ResourceType.Wood);
+float cap      = me.CapacityFor(ResourceType.Wood, sim.config.BaseCapacityPerResource);
+
+// Market:
+float price    = sim.market.Price(ResourceType.Chips);
+ResourceType sp = sim.market.SpecialResource;   // 2x this cycle
+
+// Actions (all return bool + out string reason):
+string res;
+sim.BuyGovernmentNode(me, node, out res);                       // spend PP
+sim.BuyNode(me, node, ResourceType.Wood, 20f, out res);         // offer > node value
+sim.BuyOutCompany(me, sim.Companies[1], ResourceType.Metal, 100f, out res);
+sim.BuildModule(me, node, ModuleType.ProductionBooster, out res); // 10 Chips + 10 MP
+sim.RequestTrade(me, sim.Companies[2], ResourceType.Wood, 10f,
+                 ResourceType.Chips, 3f, out res);              // must offer MORE PP value
+sim.ForceTick();   sim.ForceTax();  sim.NewGame();
+
+// React to any change (for custom UI):
+sim.OnStateChanged += RefreshMyUI;
+```
+
+## 4. RULES TO KEEP FOLLOWING
+- Design first: if you change a mechanic, update the GDD plan doc **before/with** the code.
+- One class per file in `Assets/scripts/`.
+- Keep the "extremely simple" rule — if a change adds a system, ask if a simpler one works.
+- Update `plan.txt`: check off tasks, adjust phases.

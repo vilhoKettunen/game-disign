@@ -1,0 +1,125 @@
+================================================================
+ PROJECT PLAN — "Recource" (Unity Game Design Course)
+================================================================
+
+1. OVERVIEW
+----------------------------------------------------------------
+A Unity project for the game design course. The goal: design a small,
+playable company game while keeping the design documentation (the GDD
+hub) and the code in sync: every mechanic is first written down as a
+design note, then implemented in code, with [[links]] connecting the two.
+
+This file is the master plan: it tracks the project map, the working
+conventions, the roadmap, and the next actions. Update it as things
+progress — check off finished tasks and add new ones.
+
+2. PROJECT MAP
+----------------------------------------------------------------
+  GDD hub       : Assets/GDD game disign cource/GDD hub/GDD hub.md
+  Plan docs     : Assets/GDD game disign cource/GDD hub/
+                      core-loop-plan.md
+                      trading-system-plan.md
+                      resource-hub-plan.md
+                      tax-system-plan.md
+  Game scripts  : Assets/scripts/            (gameplay code lives here)
+  Scenes        : Assets/Scenes/SampleScene.unity
+  Input config  : Assets/InputSystem_Actions.inputactions
+  Readme/UI     : Assets/TutorialInfo/
+  Plan (this)   : Assets/scripts/plan/plan.txt
+
+3. DESIGN DECISIONS (locked in)
+----------------------------------------------------------------
+  Core fantasy : Run a company. Take over resource hubs, trade their
+                 output to grow. Pay taxes to the central government
+                 (fixed 30% on all production + voluntary extra taxes)
+                 to earn political points. Use points to take over
+                 unclaimed government nodes. Win = become the most
+                 powerful company in the country.
+  Complexity   : EXTREMELY SIMPLE. No deep systems — keep each system
+                 to its smallest useful form (see the plan docs).
+  Playthrough  : ~10–60 minutes.
+  Team         : 4 people total; 2 working on it for now.
+  World        : (draft) a simple node map — hubs + government nodes.
+  Time model   : (draft) simple ticks (a button or slow timer
+                 advances production, taxes and the market at once).
+
+4. CONVENTIONS
+----------------------------------------------------------------
+  * Design-first: a mechanic is written in the GDD hub BEFORE coding.
+  * One C# class per file, inside Assets/scripts/.
+  * The GDD hub links to code with [[ClassName]] style links
+    (e.g. [[materials]]), so docs and code stay connected.
+  * Each plan doc is a QUESTION FRAME: answer the questions, check
+    them off, and it becomes the design doc for that system.
+  * This plan is the single source of truth for "what is next".
+    When a task is done, mark it [x]. When a new task appears,
+    add it to the right phase or to the NEXT ACTIONS list.
+
+5. ROADMAP
+----------------------------------------------------------------
+  Phase 0 — Design (ANSWER THE QUESTION FRAMES)
+    [x] Answer [[core-loop-plan]]
+    [x] Answer [[trading-system-plan]]
+    [x] Answer [[resource-hub-plan]]
+    [x] Answer [[tax-system-plan]]
+
+  Phase 1 — Foundations
+    [x] Unity project (3D template)
+    [x] Sample scene in place
+    [x] Game shell: flat node map + tick button/timer (GameView/GameSimulator)
+    [x] Player state: political power, resource inventory
+
+  Phase 2 — Core systems
+    [x] Resource hubs: take over + produce per tick   (materials.cs, Node.cs)
+    [x] Trading: resource-for-resource, node + company buyouts
+    [x] Taxes: 30% + extra %, penalties, bankruptcy   (GameSimulator.TaxTick)
+    [x] Government nodes: take over with political power
+    [x] Win condition: own all nodes + all companies gone
+
+  Phase 3 — Modular configuration
+    [x] Module slots on hubs (5 slots)
+    [x] ProductionBooster (2x prod) / StorageBooster (2x storage), built from
+       refined resources, no selling back
+
+  Phase 4 — Polish  (NEXT)
+    [ ] Balance the numbers (tax rate, node costs, prices, AI)
+    [ ] Feedback: clearer UI, per-node detail panel, toasts on actions
+    [ ] Optional: player-vs-AI buyout offers, more module types
+    [ ] Final pass: GDD cleanup + link the code into each plan doc
+
+6. CODE MAP (what exists now)
+----------------------------------------------------------------
+  materials.cs    ResourceType/ModuleType enums + MaterialCatalog
+                  (resources, recipes, prices, module costs)
+  Company.cs      company state: inventory, political power, tax state
+  Node.cs         node/hub/factory: produced, inputs, modules, capacity
+  Market.cs       government prices, re-rolled each tax cycle
+  GameConfig.cs   all tunables (tick speed, tax, nodes, AI) - Inspector
+  GameSimulator.cs core logic: NewGame, DoTick, Produce, TaxTick,
+                  purchases, modules, trading, AI, win/lose
+  GameView.cs     flat colored node map + IMGUI panels + controls
+
+7. NEXT ACTIONS (in order)
+----------------------------------------------------------------
+  1. PLAY it: add GameView to a scene (or it auto-creates the
+     simulator), press Play, use the TICK / TAX NOW / RESTART buttons.
+  2. Tune the numbers in GameConfig (Inspector) — tick speed, tax rate,
+     node costs, starting power, AI aggressiveness.
+  3. Balance the economy: check tax quota vs production vs node costs so
+     a 10-60 min win is realistic.
+  4. Polish: clearer UI, per-node detail, feedback on actions.
+  5. Update the GDD plan docs with final numbers + [[links]] to code.
+  6. Update this file: check off tasks, adjust phases, add new tasks.
+
+8. TEAM NOTES
+----------------------------------------------------------------
+  * 2 people working for now — split Phase 0 by doc (one person takes
+    core-loop + trading, the other resource-hub + tax), then compare
+    answers, since the docs cross-reference each other.
+  * Keep the "extremely simple" rule when answering: if an answer
+    adds a system, ask whether a simpler answer works.
+
+9. RULE OF THUMB
+----------------------------------------------------------------
+  If it is not written down, it does not exist yet.
+  If it is not in the GDD hub, it is not ready to be coded.
