@@ -12,7 +12,12 @@ using UnityEngine;
 ///   node/company purchases, government prices re-rolled each tax cycle
 /// - resource-hub: nodes produce per tick, 5 module slots, 2x production / 2x storage modules
 /// - tax: 30% of production value, paid in resources via the player's template,
-///   optional extra %, +20% penalty per fail, government seizes bankrupt companies
+///   optional extra %, +20% penalty per fail, government seizes bankrupt companies.
+///   The bill ACCUMULATES over the whole tax cycle (all ticks until the tax tick);
+///   if the inventory value is below the due tax the tax FAILS and the ENTIRE
+///   inventory is taken by the government.
+/// - metrics: per-resource production/consumption flow per tick + total inventory
+///   value (PP) shown in the UI so the player sees how their resources move
 ///
 /// GameView auto-creates a GameSimulator if none exists in the scene.
 /// </summary>
@@ -48,6 +53,16 @@ public class GameSimulator : MonoBehaviour
     public Company Player
     {
         get { return (Companies.Count > 0) ? Companies[0] : null; }
+    }
+
+    /// <summary>
+    /// The color to display for a node's ownership: the owner company's color,
+    /// or the government's color when unowned (node.Owner == null).
+    /// Every company gets its own fixed color, and the nodes it owns always use it.
+    /// </summary>
+    public static Color ColorOf(Node n)
+    {
+        return (n.Owner != null) ? n.Owner.Color : GovernmentColor;
     }
 
     void Awake()
@@ -228,6 +243,42 @@ public class GameSimulator : MonoBehaviour
         }
     }
 
+    // ================= METRICS (inventory value + resource flow) =================
+
+    /// <summary>
+    /// How many units of resource r the company's owned nodes PRODUCE per tick
+    /// (raw hubs + refined output of its factories, boosted by modules).
+    /// </summary>
+    public float ProducedPerTick(Company c, ResourceType r)
+    {
+        float sum = 0f;
+        foreach (var n in c.Nodes) sum += n.ProductionPerTick(r);
+        return sum;
+    }
+
+    /// <summary>
+    /// How many units of resource r are CONSUMED per tick by the company's owned
+    /// factories (full-rate demand; the factory may run lower when it is starved).
+    /// </summary>
+    public float ConsumedPerTick(Company c, ResourceType r)
+    {
+        float sum = 0f;
+        foreach (var n in c.Nodes)
+            if (n.IsFactory) sum += MaterialCatalog.InputAmount(n.Produced[0], r);
+        return sum;
+    }
+
+    /// <summary>
+    /// The tax bill that will be due at the next tax tick: 30% of the accumulated
+    /// production value of THIS tax cycle (+ penalty, + extra tax %). The bill
+    /// accumulates over the whole tax cycle, not just the last tick.
+    /// </summary>
+    public float UpcomingTaxQuota(Company c)
+    {
+        float penalty = Mathf.Pow(1f + config.PenaltyPerFail, c.FailedTaxesInARow);
+        return c.ProducedValueThisCycle * config.TaxRate * penalty * (1f + c.ExtraTaxPct);
+    }
+
     // ================= TAXES (tax-plan Q1/Q3) =================
 
     void TaxTick()
@@ -239,9 +290,9 @@ public class GameSimulator : MonoBehaviour
         {
             if (!c.Alive) { c.ResetTaxCycle(); continue; }
 
-            float penalty = Mathf.Pow(1f + config.PenaltyPerFail, c.FailedTaxesInARow);
-            float baseQuota = c.ProducedValueThisCycle * config.TaxRate * penalty;
-            float quota = baseQuota * (1f + c.ExtraTaxPct);
+            float baseQuota = c.ProducedValueThisCycle * config.TaxRate *
+                Mathf.Pow(1f + config.PenaltyPerFail, c.FailedTaxesInARow);
+            float quota = baseQuota * (1f + c.ExtraTaxPct); // == UpcomingTaxQuota(c)
             c.LastTaxQuota = quota;
 
             // Payment template: player picks the order (tax-plan Q1);
@@ -295,7 +346,7 @@ public class GameSimulator : MonoBehaviour
             {
                 c.FailedTaxesInARow++;
                 AddLog("!! " + c.Name + " FAILED tax: paid " + paid.ToString("0")
-                     + " of " + quota.ToString("0") + " (fail " + c.FailedTaxesInARow + "/"
+                     + " of " + quota.ToString("0") + " -> WHOLE inventory seized (fail " + c.FailedTaxesInARow + "/"
                      + config.BankruptAtFails + ", next bill +"
                      + Mathf.RoundToInt(config.PenaltyPerFail * 100f) + "%)");
                 if (c.FailedTaxesInARow >= config.BankruptAtFails) Bankrupt(c);

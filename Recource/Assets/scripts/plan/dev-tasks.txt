@@ -28,9 +28,12 @@ GameView.Update (via GameSimulator)
       -> AIAct(): AI may buy a government node / request a trade
       -> every TaxEveryTicks ticks: TaxTick()
           -> market.NewCycle(): prices re-roll, new "special" resource
-          -> each company pays 30% (+ extra %) of produced value in resources
-             paid in the priority order the player set (AI: most valuable first)
-          -> paid fully -> +PP (extra portion worth 1.5x)  |  failed -> penalty +20%, 2 fails = bankrupt
+          -> each company pays 30% (+ extra %) of the ACCUMULATED production value
+             of this whole tax cycle, in resources, paid in the priority order the
+             player set (AI: most valuable first). The UI warns when inventory value
+             is below the tax due.
+          -> paid fully -> +PP (extra portion worth 1.5x)  |  failed -> WHOLE inventory
+             is taken, penalty +20%, 2 fails in a row = bankrupt
       -> CheckEnd(): win = own ALL nodes + all other companies gone
 ```
 
@@ -55,7 +58,7 @@ GameView.Update (via GameSimulator)
 - [ ] Set the **Speed slider** to ~10s (top bar) so a game takes ~10–20 min.
 - [ ] Learn the loop:
   1. Watch production fill your inventory each tick.
-  2. Before the tax tick, check **TAX DUE AT NEXT TICK** in Your Company panel.
+  2. Before the tax tick, check **TAX DUE AT NEXT CYCLE** in Your Company panel — it is 30% of ALL production value accumulated over this whole tax cycle (it grows every tick), and it must be covered by your **inventory value** (shown right above it).
   3. Pay tax with resources (order set by the `<`/`>` priority list — put your most valuable/hardest-to-replace resources LAST).
   4. Earn PP → **Buy** gray (government) nodes from the Nodes panel.
   5. Save up refined resources → build **Speed 2x** / **Store 2x** modules on your nodes (5 slots each).

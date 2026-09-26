@@ -35,6 +35,8 @@ yes thats correct produces its resource into the player's inventory each tick an
 
 since the goverments needs in recources and what they are willing to pay for each recources changes over time and production needs to be adjusted accordingly so having a verity of recources and production modules is important for the player to be able to meet the goverments needs
 
+and the INVENTORY panel shows simple metrics so the player sees how their resources move: each resource row shows production/consumption per tick as "prod/con" (e.g. 4/2 = +4 produced in, 2 consumed by a factory, net +2 per tick) plus the current stock/limit, and below the list a TOTAL INVENTORY VALUE in PP. this lets the player plan ahead — see which resources are draining, which are piling up, and whether their total inventory value covers the upcoming tax (see [[tax-system-plan]] Q1)
+
 - [ ] Q5. Do different hubs produce different resources?
       (draft: yes — each hub has one resource type.)
 

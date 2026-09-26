@@ -24,6 +24,8 @@ and the player can setup a template on what they want to pay with so choosing th
 
 and we need to keep showing and updating the tax owed and political power gained and thae amount the player has in political powe and if they wanna add extra to their tax bill thats upcoming it will give a bonus but they will be punished if they dont meet the tax quota by an increase into their tax bill by 20% next time and if they dont meet it they will be charged a higher tax rate and if player fails 2x in a row they go bankrupt
 
+and the tax due ACCUMULATES over the whole tax sicle: its 30% of the TOTAL value of production over the whole sicle (every tick until the tax sicle), not just the last tick. the UI shows it under "TAX DUE AT NEXT CYCLE" right under "Production value this cicle", and right above it we show "Inventory value" (total PP value of the player's inventory) so the player can see if they can cover the bill. if the inventory value is LESS than the upcoming tax obligation the tax pay FAILS and the government takes the inventory completley (emptying it) — that is already how a failed pay behaves, the new part is the warning + the inventory value number so the player sees it coming
+
 - [ ] Q2. Is the tax paid in money or in resources?
       (draft: money — production is valued in Cash and 30% of that value
        is deducted. Simpler than taking physical resources.)
