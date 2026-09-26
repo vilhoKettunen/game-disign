@@ -35,10 +35,17 @@ public class MenuView : MonoBehaviour
     string importJson = "";
     string msg = "";
     Vector2 rightScroll;
+    Vector2 leftScroll;
     string previewError = "";
     List<Node> previewNodes = new List<Node>();
     GameObject previewRoot;
     bool rebuildQueued;
+
+    // live grid editor: click a cell in the text grid to paint it
+    char brush = '.';
+    bool editorDirty;
+    int newMapRows = 10;
+    int newMapCols = 12;
 
     // ================= BOOT =================
 
@@ -213,16 +220,100 @@ public class MenuView : MonoBehaviour
         if (previewRoot != null) { Destroy(previewRoot); previewRoot = null; }
     }
 
+    int SelectedPremadeIndex()
+    {
+        int idx = Mathf.Clamp(setup.premadeMap, 0, Mathf.Max(0, premadeMaps != null ? premadeMaps.Length - 1 : 0));
+        return (premadeMaps != null && idx < premadeMaps.Length && premadeMaps[idx] != null) ? idx : -1;
+    }
+
+    /// <summary>
+    /// The map to preview/edit. The selected premade map is returned as an
+    /// in-memory EDITABLE COPY (ScriptableObject.Instantiate) so the live grid
+    /// editor never mutates the asset until SAVE TO MAP ASSET is pressed.
+    /// No asset assigned -> a stable built-in classic instance.
+    /// </summary>
+    MapDefinition editorProxy;
+    MapDefinition builtinClassicCache;
+
     MapDefinition PreviewMap()
     {
-        if (setup.mapMode == 0)
+        if (setup.mapMode != 0) return null;
+        int idx = SelectedPremadeIndex();
+        if (idx >= 0)
         {
-            int idx = Mathf.Clamp(setup.premadeMap, 0, Mathf.Max(0, premadeMaps != null ? premadeMaps.Length - 1 : 0));
-            if (premadeMaps != null && idx < premadeMaps.Length && premadeMaps[idx] != null)
-                return premadeMaps[idx];
-            return MakeBuiltinClassic(); // no asset assigned yet -> built-in classic shape
+            if (editorProxy == null)
+                editorProxy = (MapDefinition)ScriptableObject.Instantiate(premadeMaps[idx]);
+            return editorProxy;
         }
-        return null;
+        if (builtinClassicCache == null)
+            builtinClassicCache = MakeBuiltinClassic(); // no asset assigned yet
+        return builtinClassicCache;
+    }
+
+    void ResetEditorProxy()
+    {
+        editorProxy = null;   // pending edits are dropped when the map selection changes
+        editorDirty = false;
+    }
+
+    void ApplyEditorToAsset()
+    {
+        int idx = SelectedPremadeIndex();
+        if (idx < 0 || editorProxy == null) return;
+        premadeMaps[idx].rows = (string[])editorProxy.rows.Clone();
+        editorDirty = false;
+    }
+
+    void RevertEditor()
+    {
+        int idx = SelectedPremadeIndex();
+        if (idx >= 0)
+            editorProxy = (MapDefinition)ScriptableObject.Instantiate(premadeMaps[idx]);
+        else
+            ResetEditorProxy();
+        editorDirty = false;
+        QueueRebuild();
+    }
+
+    /// <summary>Clears the selected premade map's grid to an empty rows x cols canvas.</summary>
+    void StartNewMap()
+    {
+        int idx = SelectedPremadeIndex();
+        if (idx < 0) { SetMsg("No premade map selected - nothing to clear."); return; }
+        var m = premadeMaps[idx];
+        var rows = new string[newMapRows];
+        for (int r = 0; r < newMapRows; r++) rows[r] = new string('.', newMapCols);
+        m.rows = rows;
+        // Drop the in-memory editor copy so the UI shows the NEW grid (not the stale old one),
+        // and refresh the live preview.
+        ResetEditorProxy();
+        QueueRebuild();
+        SetMsg("Cleared '" + m.name + "' to a new empty " + newMapRows + "x" + newMapCols + " canvas - paint it on the right (unsaved until SAVE TO MAP ASSET).");
+    }
+
+    /// <summary>One-line brush picker: a button per legend character, current one highlighted.</summary>
+    void BrushPicker()
+    {
+        char[] brushes = { '.', 'W', 'M', 'E', 'a', 'C', 'P', 'B', 'F', 'R', '?', '0' };
+        string[] tips = { "ground", "wood", "metal", "energy", "water", "chips", "mech", "building", "food", "any", "rand", "WATER" };
+        GUILayout.BeginHorizontal();
+        for (int i = 0; i < brushes.Length; i++)
+        {
+            var s = new GUIStyle(GUI.skin.button);
+            s.fixedWidth = 26;
+            s.alignment = TextAnchor.MiddleCenter;
+            if (brush == brushes[i])
+            {
+                GUI.backgroundColor = new Color(0.35f, 0.6f, 1f);
+                s.fontStyle = FontStyle.Bold;
+            }
+            if (GUILayout.Button(brushes[i].ToString(), s, GUILayout.Height(24)))
+                brush = brushes[i];
+            s.fontStyle = FontStyle.Normal;
+            GUI.backgroundColor = Color.white;
+        }
+        GUILayout.Label("brush: " + brush + " (" + tips[System.Array.IndexOf(brushes, brush)] + ")", Small());
+        GUILayout.EndHorizontal();
     }
 
     MapDefinition MakeBuiltinClassic()
@@ -265,16 +356,19 @@ public class MenuView : MonoBehaviour
     void LeftColumn()
     {
         GUILayout.BeginVertical("box", GUILayout.Width(410));
+        leftScroll = GUILayout.BeginScrollView(leftScroll, false, false);
 
         GUILayout.Label("MAP  (premade = node types fixed by the shape)", Bold());
         if (GUILayout.Toggle(setup.mapMode == 0, "PREMADE MAP (shape decides where + which types)", "toggle") && setup.mapMode != 0)
         {
             setup.mapMode = 0;
+            ResetEditorProxy();
             QueueRebuild();
         }
         if (GUILayout.Toggle(setup.mapMode == 1, "FULLY RANDOM MAP (types rolled from the mix below)", "toggle") && setup.mapMode != 1)
         {
             setup.mapMode = 1;
+            ResetEditorProxy();
             QueueRebuild();
         }
         if (setup.mapMode == 0)
@@ -289,6 +383,7 @@ public class MenuView : MonoBehaviour
                     if (GUILayout.Toggle(setup.premadeMap == i, name, "toggle") && setup.premadeMap != i)
                     {
                         setup.premadeMap = i;
+                        ResetEditorProxy();
                         QueueRebuild();
                     }
                 }
@@ -312,6 +407,25 @@ public class MenuView : MonoBehaviour
         setup.dualResourceHubPct = IntField("Dual-resource hub %", setup.dualResourceHubPct, 0, 100);
         setup.companyCount = IntField("Company count (you + AI)", setup.companyCount, 2, 8);
         setup.startingPP = IntField("Starting PP", Mathf.RoundToInt(setup.startingPP), 0, 100000);
+        GUILayout.Space(4);
+        GUILayout.Label("NODE COST CURVE  (exponential in the buyer's node count - gov node and rival node cost the SAME)", Small());
+        string baseTxt = GUILayout.TextField("Base node price (PP)", setup.nodeBaseValue.ToString(System.Globalization.CultureInfo.InvariantCulture), GUILayout.Width(340));
+        float bval;
+        if (float.TryParse(baseTxt, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out bval))
+            setup.nodeBaseValue = Mathf.Max(0f, bval);
+        string multTxt = GUILayout.TextField("Growth multiplier per owned node", setup.nodeCostGrowthMult.ToString(System.Globalization.CultureInfo.InvariantCulture), GUILayout.Width(340));
+        float mval;
+        if (float.TryParse(multTxt, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out mval))
+            setup.nodeCostGrowthMult = mval;
+        setup.nodeCostGrowthMult = Mathf.Clamp(setup.nodeCostGrowthMult, 1f, 10f);
+        GUILayout.Label(
+            "Cost of your 1st, 2nd, 4th, 8th, 12th node:  "
+            + NodeCostPreview(setup.nodeBaseValue, setup.nodeCostGrowthMult, 0)
+            + "   " + NodeCostPreview(setup.nodeBaseValue, setup.nodeCostGrowthMult, 1)
+            + "   " + NodeCostPreview(setup.nodeBaseValue, setup.nodeCostGrowthMult, 3)
+            + "   " + NodeCostPreview(setup.nodeBaseValue, setup.nodeCostGrowthMult, 7)
+            + "   " + NodeCostPreview(setup.nodeBaseValue, setup.nodeCostGrowthMult, 11)
+            + "  PP", Small());
         setup.taxEveryTicks = IntField("Tax every (ticks)", Mathf.RoundToInt(setup.taxEveryTicks), 1, 99);
         setup.taxRatePct = IntField("Tax rate %", Mathf.RoundToInt(setup.taxRatePct), 1, 100);
         setup.tickSeconds = IntField("Tick length (seconds)", Mathf.RoundToInt(setup.tickSeconds), 1, 3600);
@@ -334,6 +448,31 @@ public class MenuView : MonoBehaviour
             setup.rawWoodPct = vals[0]; setup.rawMetalPct = vals[1]; setup.rawEnergyPct = vals[2];
             setup.rawWaterPct = vals[3]; setup.factoryPct = vals[4];
             QueueRebuild();
+        }
+
+        GUILayout.Space(10);
+        GUILayout.Label("MAP EDITING  (start a new map, then paint cells in the grid on the right)", Bold());
+        int nr = IntField("New map rows", newMapRows, 1, 60);
+        int nc = IntField("New map cols", newMapCols, 1, 120);
+        if (nr != newMapRows || nc != newMapCols) { newMapRows = nr; newMapCols = nc; }
+        if (GUILayout.Button("START NEW MAP  (empty canvas, then paint it)", GUILayout.Height(30)))
+            StartNewMap();
+        if (premadeMaps != null && SelectedPremadeIndex() >= 0)
+        {
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("SAVE TO MAP ASSET", GUILayout.Width(130), GUILayout.Height(28)))
+                ApplyEditorToAsset();
+            if (GUILayout.Button("REVERT EDITS", GUILayout.Width(110), GUILayout.Height(28)))
+                RevertEditor();
+            GUILayout.EndHorizontal();
+            if (editorDirty)
+                GUILayout.Label("  ! unsaved grid edits - SAVE TO MAP ASSET writes them into the selected premade map", Error());
+            GUILayout.Label("  Brush: pick a character below, then CLICK cells in the MAP EDITOR grid on the right.", Small());
+            BrushPicker();
+        }
+        else
+        {
+            GUILayout.Label("  No premade map asset assigned - pick/START a premade map to enable saving.", Small());
         }
 
         GUILayout.Space(10);
@@ -379,24 +518,26 @@ public class MenuView : MonoBehaviour
                 ? premadeMaps[setup.premadeMap] : null;
             GameFlow.OpenGame();
         }
-        GUILayout.EndVertical();
+        GUILayout.EndScrollView();
     }
 
     void RightColumn()
     {
         GUILayout.BeginVertical("box");
 
-        GUILayout.Label("MAP PREVIEW  (text grid)", Bold());
         MapDefinition map = PreviewMap();
         if (map != null)
         {
+            GUILayout.Label("MAP EDITOR  (click a cell to paint it with the brush, live)", Bold());
             rightScroll = GUILayout.BeginScrollView(rightScroll, false, false);
-            GUILayout.Label(map.PreviewText(), Mono(), GUILayout.Height(150));
+            GridEditor(map);
             GUILayout.EndScrollView();
+            GUILayout.Label("    " + ColumnNumbers(map.Cols), Small());
+            GUILayout.Label("legend: W=Wood M=Metal E=Energy a=Water  C=Chips P=MechParts B=Building F=Food\n        R=any node  ?=random raw  0=water  .=ground", Small());
         }
         else
         {
-            GUILayout.Label("Random map: the exact layout is rolled from the SEED + node count when you start.\nChoose a premade map to see a fixed shape here.", Small());
+            GUILayout.Label("Random map: the exact layout is rolled from the SEED + node count when you start.\nChoose a premade map to see/edit its shape here.", Small());
         }
 
         if (previewError != "") GUILayout.Label(previewError, Error());
@@ -427,6 +568,65 @@ public class MenuView : MonoBehaviour
             GUILayout.EndHorizontal();
         }
         GUILayout.EndVertical();
+    }
+
+    /// <summary>
+    /// Clickable text grid (runtime IMGUI): each character is a cell button;
+    /// click one to paint it with the current brush (W/M/E/a/C/P/B/F/R/?/0/.).
+    /// The 3D preview updates live.
+    /// </summary>
+    static GUIStyle _cellStyle;
+    GUIStyle CellStyle()
+    {
+        if (_cellStyle == null)
+        {
+            _cellStyle = new GUIStyle(GUI.skin.button);
+            _cellStyle.fontSize = 14;
+            _cellStyle.fixedWidth = 18;
+            _cellStyle.fixedHeight = 20;
+            _cellStyle.alignment = TextAnchor.MiddleCenter;
+            _cellStyle.margin = new RectOffset(0, 0, 0, 0);
+            _cellStyle.padding = new RectOffset(0, 0, 0, 0);
+        }
+        return _cellStyle;
+    }
+
+    void GridEditor(MapDefinition map)
+    {
+        var cell = CellStyle();
+        for (int r = 0; r < map.Rows; r++)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(r.ToString(), Small(), GUILayout.Width(22));
+            int rowLen = (r < map.rows.Length) ? Mathf.Max(1, map.rows[r].Length) : 1;
+            string rowText = (r < map.rows.Length) ? map.rows[r] : new string('.', rowLen);
+            for (int c = 0; c < rowLen; c++)
+            {
+                char cur = rowText[c];
+                var oldBG = GUI.backgroundColor;
+                if (cur == brush) GUI.backgroundColor = new Color(0.4f, 0.65f, 1f);
+                bool pressed = GUILayout.Button(cur.ToString(), cell);
+                GUI.backgroundColor = oldBG;
+                if (pressed && cur != brush)
+                {
+                    string s = (r < map.rows.Length) ? map.rows[r] : new string('.', c + 1);
+                    char[] a = s.ToCharArray();
+                    if (c >= a.Length) { var tmp = new char[c + 1]; a.CopyTo(tmp, 0); a = tmp; }
+                    a[c] = brush;
+                    map.rows[r] = new string(a);
+                    editorDirty = true;
+                    QueueRebuild();
+                }
+            }
+            GUILayout.EndHorizontal();
+        }
+    }
+
+    static string ColumnNumbers(int cols)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int c = 0; c < cols; c++) sb.Append(c % 10);
+        return sb.ToString();
     }
 
     bool rebuildShown = true;
@@ -465,6 +665,11 @@ public class MenuView : MonoBehaviour
     void SetMsg(string s) { msg = s; }
 
     // ================= GUI helpers =================
+
+    static string NodeCostPreview(float baseCost, float mult, int owned)
+    {
+        return (baseCost * Mathf.Pow(mult, owned)).ToString("0");
+    }
 
     int IntField(string label, int value, int min, int max)
     {

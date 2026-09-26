@@ -156,6 +156,8 @@ public class GameSimulator : MonoBehaviour
             config.TaxEveryTicks = Mathf.Max(1, Mathf.RoundToInt(setup.taxEveryTicks));
             config.TaxRate = Mathf.Clamp01(setup.taxRatePct / 100f);
             config.TickSeconds = Mathf.Clamp(setup.tickSeconds, 1f, 3600f);
+            config.NodeBaseValue = Mathf.Max(0f, setup.nodeBaseValue);
+            config.NodeCostGrowthMult = Mathf.Clamp(setup.nodeCostGrowthMult, 1f, 10f);
         }
 
         Companies.Clear();
@@ -240,6 +242,27 @@ public class GameSimulator : MonoBehaviour
 
     // ================= PRODUCTION (resource-hub-plan Q4) =================
 
+    /// <summary>
+    /// How hard this factory runs this tick, 0..1. 1 = fully supplied (output =
+    /// its boosted rate); lower when it is short on inputs. The bottleneck input
+    /// sets the efficiency, and EVERY input is scaled to that same efficiency so
+    /// a factory never burns inputs it isn't converting into output.
+    /// </summary>
+    float FactoryEfficiency(Company c, Node n, ResourceType outR, float maxOut)
+    {
+        if (maxOut <= 0.0001f) return 0f;
+        if (n.Inputs.Count == 0) return 1f;
+
+        float eff = 1f;
+        foreach (var inR in n.Inputs)
+        {
+            float ratio = MaterialCatalog.InputAmount(outR, inR);
+            if (ratio <= 0f) continue;
+            eff = Mathf.Min(eff, (c.GetInventory(inR) / ratio) / maxOut);
+        }
+        return Mathf.Clamp01(eff);
+    }
+
     void Produce(Company c)
     {
         foreach (var n in c.Nodes)
@@ -250,28 +273,28 @@ public class GameSimulator : MonoBehaviour
                     c.CapacityFor(outR, config.BaseCapacityPerResource) - c.GetInventory(outR));
                 if (space <= 0f) continue;
 
+                // Boosted production rate (includes the Speed multiplier).
                 float maxOut = Mathf.Min(n.ProductionPerTick(outR), space);
 
-                if (n.Inputs.Count > 0)
-                {
-                    // factory: limit output by available inputs
-                    foreach (var inR in n.Inputs)
-                    {
-                        float ratio = MaterialCatalog.InputAmount(outR, inR);
-                        if (ratio <= 0f) continue;
-                        maxOut = Mathf.Min(maxOut, c.GetInventory(inR) / ratio);
-                    }
-                }
-                if (maxOut <= 0.001f) continue;
+                // A factory runs at the efficiency of its scarcest input.
+                float eff = FactoryEfficiency(c, n, outR, maxOut);
+                if (eff <= 0f) continue;
+                float outAmt = maxOut * eff;
 
+                // Consume inputs scaled to the SAME efficiency as the output,
+                // so a speed-up raises consumption proportionally and a
+                // starved factory takes only what it actually converts.
                 foreach (var inR in n.Inputs)
                 {
                     float ratio = MaterialCatalog.InputAmount(outR, inR);
-                    if (ratio > 0f)
-                        c.SetInventory(inR, c.GetInventory(inR) - maxOut * ratio);
+                    if (ratio <= 0f) continue;
+                    float use = outAmt * ratio;
+                    float have = c.GetInventory(inR);
+                    c.SetInventory(inR, have - use);
                 }
-                c.SetInventory(outR, c.GetInventory(outR) + maxOut);
-                c.ProducedValueThisCycle += maxOut * market.Price(outR);
+
+                c.SetInventory(outR, c.GetInventory(outR) + outAmt);
+                c.ProducedValueThisCycle += outAmt * market.Price(outR);
             }
         }
     }
@@ -279,25 +302,48 @@ public class GameSimulator : MonoBehaviour
     // ================= METRICS (inventory value + resource flow) =================
 
     /// <summary>
-    /// How many units of resource r the company's owned nodes PRODUCE per tick
-    /// (raw hubs + refined output of its factories, boosted by modules).
+    /// How many units of resource r the company's owned nodes ACTUALLY produce
+    /// per tick: the boosted rate (raw hubs + factories) scaled by the factory's
+    /// current input efficiency, so it matches what Produce() really yields. A
+    /// 2x Speed-up with enough inputs shows 2x; starved it shows the reduced rate.
     /// </summary>
     public float ProducedPerTick(Company c, ResourceType r)
     {
         float sum = 0f;
-        foreach (var n in c.Nodes) sum += n.ProductionPerTick(r);
+        foreach (var n in c.Nodes)
+        {
+            if (!n.Produced.Contains(r)) continue;
+            float space = Mathf.Max(0f,
+                c.CapacityFor(r, config.BaseCapacityPerResource) - c.GetInventory(r));
+            float maxOut = Mathf.Min(n.ProductionPerTick(r), space);
+            float eff = FactoryEfficiency(c, n, r, maxOut);
+            sum += maxOut * eff;
+        }
         return sum;
     }
 
     /// <summary>
     /// How many units of resource r are CONSUMED per tick by the company's owned
-    /// factories (full-rate demand; the factory may run lower when it is starved).
+    /// factories, at the rate they are ACTUALLY running: the full boosted
+    /// consumption, scaled down by the factory's current input efficiency. So a
+    /// Speed-up raises the burn, and a 50%-supplied factory shows half the burn.
     /// </summary>
     public float ConsumedPerTick(Company c, ResourceType r)
     {
         float sum = 0f;
         foreach (var n in c.Nodes)
-            if (n.IsFactory) sum += MaterialCatalog.InputAmount(n.Produced[0], r);
+        {
+            if (!n.IsFactory) continue;
+            var outR = n.Produced[0];
+            float ratio = MaterialCatalog.InputAmount(outR, r);
+            if (ratio <= 0f) continue;
+
+            float space = Mathf.Max(0f,
+                c.CapacityFor(outR, config.BaseCapacityPerResource) - c.GetInventory(outR));
+            float maxOut = Mathf.Min(n.ProductionPerTick(outR), space);
+            float eff = FactoryEfficiency(c, n, outR, maxOut);
+            sum += (maxOut * eff) * ratio;
+        }
         return sum;
     }
 
@@ -418,25 +464,36 @@ public class GameSimulator : MonoBehaviour
         return null;
     }
 
-    /// <summary>Cost to buy a government node - scales with how many nodes you already own.</summary>
-    public float GovernmentNodeCost(Company c)
+    /// <summary>
+    /// Cost of the NEXT node for a buyer, EXponential in the buyer's node count:
+    /// base * mult^owned (mult 1.4 -> 1st ~1x, 2nd ~1.4x, 4th ~3x, 8th ~10x, 12th ~20x).
+    /// The same curve prices government nodes AND rival nodes, so buying from the
+    /// government or buying out a competitor is never a loophole - it always costs
+    /// the buyer the same amount, regardless of who sells.
+    /// </summary>
+    public float NextNodeCost(Company c)
     {
-        return config.NodeBaseValue * (1f + config.NodeCostGrowth * c.OwnedNodeCount);
+        if (c == null) return config.NodeBaseValue;
+        return config.NodeBaseValue * Mathf.Pow(config.NodeCostGrowthMult, c.OwnedNodeCount);
     }
 
-    /// <summary>Value of a company-owned node (what a buyer must offer more than).</summary>
+    [System.Obsolete("Use NextNodeCost(buyer) - node cost is now exponential and buyer-based.")]
+    public float GovernmentNodeCost(Company c)
+    {
+        return NextNodeCost(c);
+    }
+
+    [System.Obsolete("Use NextNodeCost(buyer) - node value now depends on the BUYER, not the seller.")]
     public float CompanyNodeValue(Node n)
     {
-        var s = n.Owner;
-        if (s == null) return config.NodeBaseValue;
-        return config.NodeBaseValue * (1f + config.NodeCostGrowth * s.OwnedNodeCount);
+        return NextNodeCost(n.Owner);
     }
 
     public bool BuyGovernmentNode(Company c, Node n, out string result)
     {
         if (!c.Alive) { result = "Company is gone"; return false; }
         if (n.Owner != null) { result = "Not a government node"; return false; }
-        float cost = GovernmentNodeCost(c);
+        float cost = NextNodeCost(c);
         if (c.PoliticalPower < cost)
         {
             result = "Not enough political power: need " + cost.ToString("0") + " PP";
@@ -465,10 +522,10 @@ public class GameSimulator : MonoBehaviour
         }
 
         float value = offerAmt * market.Price(offerR);
-        float need = CompanyNodeValue(n);
+        float need = NextNodeCost(buyer);
         if (value <= need)
         {
-            result = "Offer rejected: " + value.ToString("0") + " PP is not MORE than node value " + need.ToString("0") + " PP";
+            result = "Offer rejected: " + value.ToString("0") + " PP is not MORE than the node's cost to YOU (" + need.ToString("0") + " PP - grows with your node count)";
             return false;
         }
 
@@ -498,8 +555,11 @@ public class GameSimulator : MonoBehaviour
             return false;
         }
 
-        float need = 0f;
-        foreach (var n in seller.Nodes) need += CompanyNodeValue(n);
+        // every node costs the buyer the same (exponential in the BUYER's count).
+        // A full company buyout is a bulk deal, so the total is discounted by
+        // config.BuyoutCostFactor (10 = 10x cheaper than buying its nodes one
+        // by one), making it affordable to actually pull off.
+        float need = BuyoutCost(buyer, seller);
         float value = offerAmt * market.Price(offerR);
         if (value <= need)
         {
@@ -517,6 +577,51 @@ public class GameSimulator : MonoBehaviour
         seller.Alive = false;
         AddLog(buyer.Name + " BOUGHT OUT " + seller.Name
              + " for " + value.ToString("0") + " PP worth of " + MaterialCatalog.Name(offerR));
+        CheckEnd();
+        StateChanged();
+        result = "ok";
+        return true;
+    }
+
+    /// <summary>
+    /// What a company buyout costs the buyer: the seller's nodes priced at the
+    /// buyer's own exponential next-node curve, discounted by config.BuyoutCostFactor
+    /// (bulk deal). The same price applies whether you pay in resources or in PP.
+    /// </summary>
+    public float BuyoutCost(Company buyer, Company seller)
+    {
+        if (seller == null) return 0f;
+        return (seller.Nodes.Count * NextNodeCost(buyer)) / config.BuyoutCostFactor;
+    }
+
+    /// <summary>
+    /// Direct buyout of a competitor with earned Political Power (no resources
+    /// offered). All of the seller's nodes transfer to the buyer and the seller
+    /// is removed from the game. Costs the discounted bulk-deal price (BuyoutCost).
+    /// </summary>
+    public bool BuyOutCompanyWithPP(Company buyer, Company seller, out string result)
+    {
+        if (buyer == null || !buyer.Alive) { result = "Invalid buyer"; return false; }
+        if (seller == null || seller == buyer) { result = "Invalid target"; return false; }
+        if (!seller.Alive) { result = "That company is gone"; return false; }
+        if (seller.Nodes.Count == 0) { result = "That company has no nodes"; return false; }
+
+        float cost = BuyoutCost(buyer, seller);
+        if (buyer.PoliticalPower < cost - 0.001f)
+        {
+            result = "Not enough political power: need " + cost.ToString("0") + " PP (you have " + buyer.PoliticalPower.ToString("0") + " PP)";
+            return false;
+        }
+
+        buyer.PoliticalPower -= cost;
+        foreach (var n in seller.Nodes)
+        {
+            n.Owner = buyer;
+            buyer.Nodes.Add(n);
+        }
+        seller.Nodes.Clear();
+        seller.Alive = false;
+        AddLog(buyer.Name + " BOUGHT OUT " + seller.Name + " for " + cost.ToString("0") + " PP (direct PP payment)");
         CheckEnd();
         StateChanged();
         result = "ok";
@@ -572,6 +677,27 @@ public class GameSimulator : MonoBehaviour
             return false;
         }
 
+        // The SELLER must actually hold the requested resource BEFORE you pay for it,
+        // otherwise they would swallow your offer and hand you nothing.
+        float toHave = to.GetInventory(reqR);
+        if (toHave < reqAmt - 0.001f)
+        {
+            result = to.Name + " can't trade " + MaterialCatalog.Name(reqR)
+                   + ": it only has " + toHave.ToString("0") + " (you asked for " + reqAmt.ToString("0") + ")";
+            return false;
+        }
+
+        // The BUYER must have room to receive the requested resource, else they'd
+        // hand over their offer for stock they can't hold.
+        float fromSpace = Mathf.Max(0f,
+            from.CapacityFor(reqR, config.BaseCapacityPerResource) - from.GetInventory(reqR));
+        if (fromSpace < reqAmt - 0.001f)
+        {
+            result = "You have no storage space for " + MaterialCatalog.Name(reqR)
+                   + " (you are already full of it)";
+            return false;
+        }
+
         float offerValue = offerAmt * market.Price(offerR);
         float reqValue = reqAmt * market.Price(reqR);
         if (offerValue <= reqValue)
@@ -581,19 +707,23 @@ public class GameSimulator : MonoBehaviour
             return false;
         }
 
+        // The SELLER is receiving the offered resource, so check ITS storage for offerR.
         float space = Mathf.Max(0f,
-            to.CapacityFor(reqR, config.BaseCapacityPerResource) - to.GetInventory(reqR));
-        float take = Mathf.Min(reqAmt, space);
-        if (take <= 0.001f)
+            to.CapacityFor(offerR, config.BaseCapacityPerResource) - to.GetInventory(offerR));
+        if (space < offerAmt - 0.001f)
         {
-            result = to.Name + " has no storage space for " + MaterialCatalog.Name(reqR);
+            result = to.Name + " has no storage space for your " + MaterialCatalog.Name(offerR)
+                   + " offer (they are already full of it)";
             return false;
         }
 
+        // Swap: seller gives reqR (it has it), buyer gives offerR (it has it).
         from.SetInventory(offerR, from.GetInventory(offerR) - offerAmt);
-        to.SetInventory(reqR, to.GetInventory(reqR) + take);
+        to.SetInventory(reqR, toHave - reqAmt);
+        to.SetInventory(offerR, to.GetInventory(offerR) + offerAmt);
+        from.SetInventory(reqR, from.GetInventory(reqR) + reqAmt);
         AddLog(from.Name + " traded " + offerAmt.ToString("0") + " " + MaterialCatalog.Name(offerR)
-             + " (" + offerValue.ToString("0") + " PP) for " + take.ToString("0") + " "
+             + " (" + offerValue.ToString("0") + " PP) for " + reqAmt.ToString("0") + " "
              + MaterialCatalog.Name(reqR) + " (" + reqValue.ToString("0") + " PP) with " + to.Name);
         StateChanged();
         result = "ok";

@@ -10,10 +10,11 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 7f3a2b1c4d5e6f708192a3b4c5d6e7f8, type: 3}
-  m_Name: 
+  m_Name:
   m_EditorClassIdentifier: Assembly-CSharp::MapDefinition
   rows:
-  - RRRRR
-  - RRRRR
-  - RRRRR
-  - RRRRR
+  - W.R...M.
+  - .0..E..R
+  - R..a...F
+  - .M..R...
+  - ....W..E

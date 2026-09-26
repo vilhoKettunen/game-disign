@@ -30,9 +30,16 @@ public class GameConfig
     public float BaseNodeCapacity = 10f;        // storage added by a node
     public int MaxModuleSlots = 5;              // resource-hub-plan Q8
 
-    // Node prices (core-loop Q8: the more nodes you own, the more the next one costs)
+    // Node prices (core-loop Q8): EXponential in the buyer's node count -
+    // cost = NodeBaseValue * NodeCostGrowthMult^nodesOwned, so at mult 1.4:
+    // 1st ~base, 2nd ~1.4x, 4th ~3x, 8th ~10x, 12th ~20x.
+    // Buying a government node and buying a rival's node cost the SAME:
+    // both scale with the BUYER's portfolio, never the seller's.
     public float NodeBaseValue = 100f;
-    public float NodeCostGrowth = 0.5f;
+    public float NodeCostGrowthMult = 1.4f;
+    // A full company buyout is a bulk deal, discounted this much vs buying its
+    // nodes one by one (10 = 10x cheaper), so it is actually affordable.
+    public float BuyoutCostFactor = 10f;
 
     // AI aggressiveness (core-loop Q7: simple actions, expand like the player)
     public float AIExpansionChance = 0.35f;

@@ -47,6 +47,20 @@ public class MapDefinition : ScriptableObject
         return s[col];
     }
 
+    /// <summary>
+    /// Set a cell (live grid editor in the menu). Rows shorter than col are
+    /// padded with ground first. Mutates the asset.
+    /// </summary>
+    public void SetCell(int row, int col, char ch)
+    {
+        if (row < 0 || row >= rows.Length || col < 0) return;
+        string s = rows[row];
+        if (col >= s.Length) s = s + new string('.', col - s.Length + 1);
+        char[] a = s.ToCharArray();
+        a[col] = ch;
+        rows[row] = new string(a);
+    }
+
     public bool IsNodeCell(char c)
     {
         return c == 'W' || c == 'M' || c == 'E' || c == 'a' ||

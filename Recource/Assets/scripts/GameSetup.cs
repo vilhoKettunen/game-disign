@@ -32,6 +32,8 @@ public class GameSetup
     // companies & economy
     public int companyCount = 4;
     public float startingPP = 400f;
+    public float nodeBaseValue = 100f;   // first node cost (PP)
+    public float nodeCostGrowthMult = 1.4f; // exponential: next = base * mult^nodesOwned
     public float taxEveryTicks = 5f;
     public float taxRatePct = 30f;
     public float tickSeconds = 60f;
@@ -52,6 +54,8 @@ public class GameSetup
         s.factoryPct = factoryPct;
         s.companyCount = companyCount;
         s.startingPP = startingPP;
+        s.nodeBaseValue = nodeBaseValue;
+        s.nodeCostGrowthMult = nodeCostGrowthMult;
         s.taxEveryTicks = taxEveryTicks;
         s.taxRatePct = taxRatePct;
         s.tickSeconds = tickSeconds;
@@ -78,6 +82,8 @@ public class GameSetup
         sb.Append("factoryPct=").Append(factoryPct).Append('\n');
         sb.Append("companyCount=").Append(companyCount).Append('\n');
         sb.Append("startingPP=").Append(startingPP.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
+        sb.Append("nodeBaseValue=").Append(nodeBaseValue.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
+        sb.Append("nodeCostGrowthMult=").Append(nodeCostGrowthMult.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
         sb.Append("taxEveryTicks=").Append(taxEveryTicks.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
         sb.Append("taxRatePct=").Append(taxRatePct.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
         sb.Append("tickSeconds=").Append(tickSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
@@ -111,6 +117,8 @@ public class GameSetup
                 case "factoryPct": if (int.TryParse(v, out i)) s.factoryPct = i; break;
                 case "companyCount": if (int.TryParse(v, out i)) s.companyCount = i; break;
                 case "startingPP": if (float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out f)) s.startingPP = f; break;
+                case "nodeBaseValue": if (float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out f)) s.nodeBaseValue = f; break;
+                case "nodeCostGrowthMult": if (float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out f)) s.nodeCostGrowthMult = f; break;
                 case "taxEveryTicks": if (float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out f)) s.taxEveryTicks = f; break;
                 case "taxRatePct": if (float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out f)) s.taxRatePct = f; break;
                 case "tickSeconds": if (float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out f)) s.tickSeconds = f; break;

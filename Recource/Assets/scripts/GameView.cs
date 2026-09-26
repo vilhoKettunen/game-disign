@@ -11,8 +11,9 @@ using UnityEngine.InputSystem;
 ///   "colored plain area of what a company owns... expands according to what
 ///   nodes a company owns")
 /// - IMGUI panels: your company (tax quota, extra tax, payment template),
-///   government market (prices, companies), nodes (buy / build modules),
-///   trade forms (trading-plan Q8), log, game-over screen
+///   government market (prices, companies), trade (resource trades + company
+///   buyouts), per-node panel (click a node on the map: buy / build modules),
+///   log, game-over screen
 /// </summary>
 public class GameView : MonoBehaviour
 {
@@ -62,10 +63,6 @@ public class GameView : MonoBehaviour
     float tradeOfferAmt = 10f;
     int tradeReqRes = 1;
     float tradeReqAmt = 10f;
-
-    int buyNodeIndex = -1;
-    int buyNodeOfferRes = 0;
-    float buyNodeOfferAmt = 20f;
 
     int buyOutIndex = 1;
     int buyOutOfferRes = 0;
@@ -546,11 +543,11 @@ public class GameView : MonoBehaviour
         GUILayout.Space(12);
 
         // panel toggles (choice is remembered between games)
-        bool prevC = showCompany, prevP = showPrices, prevN = showNodes;
+        bool prevC = showCompany, prevP = showPrices, prevT = showTrade;
         showCompany = GUILayout.Toggle(showCompany, "Company", GUILayout.Width(84));
         showPrices  = GUILayout.Toggle(showPrices,  "Prices",  GUILayout.Width(70));
-        showNodes   = GUILayout.Toggle(showNodes,   "Nodes",   GUILayout.Width(70));
-        if (showCompany != prevC || showPrices != prevP || showNodes != prevN) SaveToggles();
+        showTrade   = GUILayout.Toggle(showTrade,   "Trade",   GUILayout.Width(70));
+        if (showCompany != prevC || showPrices != prevP || showTrade != prevT) SaveToggles();
         if (GUILayout.Button(showInfo ? "INFO ✕" : "INFO ?", GUILayout.Width(75)))
             showInfo = !showInfo;
         GUILayout.EndHorizontal();
@@ -560,15 +557,15 @@ public class GameView : MonoBehaviour
 
         // ---- main panels (only the visible ones) ----
         // The node info panel is a separate docked panel: it shows whenever a node is
-        // selected on the map, independent of the Company/Prices/Nodes toggles, so it
-        // survives the later removal of the old [Nodes] section.
+        // selected on the map, independent of the Company/Prices/Trade toggles, and
+        // replaces the old [Nodes] section (retired once the node-specific UI landed).
         bool nodeUiOpen = (selectedNode >= 0 && selectedNode < S.Nodes.Count);
-        if (showCompany || showPrices || showNodes || nodeUiOpen)
+        if (showCompany || showPrices || showTrade || nodeUiOpen)
         {
             GUILayout.BeginHorizontal();
             if (showCompany) CompanyPanel();
             if (showPrices)  MarketPanel();
-            if (showNodes)   NodePanel();
+            if (showTrade)   TradePanel();
             if (nodeUiOpen)  NodeUiPanel(S.Nodes[selectedNode]);
             GUILayout.EndHorizontal();
         }
@@ -635,19 +632,23 @@ public class GameView : MonoBehaviour
 
         GUILayout.Space(6);
         GUILayout.Label("INVENTORY  (prod/con per tick | stock/limit)");
+        GUILayout.Label("prod/con are the REAL rates - fractions appear when a factory is starved of inputs or storage is full.", Small);
         for (int i = 0; i < MaterialCatalog.ResourceCount; i++)
         {
             var r = (ResourceType)i;
             float prod = S.ProducedPerTick(p, r);
             float cons = S.ConsumedPerTick(p, r);
-            string flow = (prod > 0f || cons > 0f)
-                ? "  " + prod.ToString("0") + "/" + cons.ToString("0") + " per tick"
+            // Show ONE decimal: a factory running at 50% efficiency produces
+            // e.g. 1.0/tick, not 0 - whole-number rounding used to make live
+            // materials read as "(unused)".
+            string flow = (prod > 0.001f || cons > 0.001f)
+                ? "  " + prod.ToString("0.0") + "/" + cons.ToString("0.0") + " per tick"
                 : "  - (unused)";
-            GUILayout.Label("  " + MaterialCatalog.Name(r) + flow + "   " + p.GetInventory(r).ToString("0")
+            GUILayout.Label("  " + MaterialCatalog.Name(r) + flow + "   " + p.GetInventory(r).ToString("0.0")
                 + " / " + p.CapacityFor(r, S.config.BaseCapacityPerResource).ToString("0"));
         }
         GUILayout.Label("Total inventory value: ~" + p.InventoryValue(S.market).ToString("0") + " PP  (tax is taken from this)");
-        GUILayout.Label("Gov node cost now: " + S.GovernmentNodeCost(p).ToString("0") + " PP");
+        GUILayout.Label("Next node costs you: " + S.NextNodeCost(p).ToString("0") + " PP (gov node OR rival node - same price)");
         GUILayout.EndVertical();
     }
 
@@ -676,65 +677,48 @@ public class GameView : MonoBehaviour
         }
         GUILayout.Space(4);
         GUILayout.Label("Free government nodes: " + S.GovernmentNodeCount());
+
+        // ---- other companies' inventories (so you can see what they actually hold
+        //      before you offer them a trade) ----
+        GUILayout.Space(8);
+        GUILayout.Label("OTHER COMPANIES' INVENTORIES", Bold);
+        GUILayout.Label("stock of each resource (0 = they can't trade it to you)", Small);
+        for (int i = 0; i < S.Companies.Count; i++)
+        {
+            var c = S.Companies[i];
+            if (c.IsPlayer || !c.Alive) continue;
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(c.Name + ":", CompanyColorStyle(c.Color), GUILayout.Width(120));
+            GUILayout.BeginHorizontal();
+            for (int k = 0; k < MaterialCatalog.ResourceCount; k++)
+            {
+                var r = (ResourceType)k;
+                float amt = c.GetInventory(r);
+                GUILayout.Label(MaterialCatalog.Code(r) + " " + amt.ToString("0"),
+                    (amt > 0.5f) ? GUI.skin.label : Small, GUILayout.Width(52));
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.EndHorizontal();
+        }
         GUILayout.EndVertical();
     }
 
-    void NodePanel()
+    /// <summary>
+    /// Trade panel - the economy section that survives the retirement of the old
+    /// [Nodes] section. It keeps the two cross-company actions that are not tied to
+    /// one specific node:
+    ///   - TRADE RESOURCES  (offer more value than you request to a company)
+    ///   - BUY OUT A COMPANY (offer more value than ALL of its nodes combined)
+    /// Buying / upgrading an individual node now lives in the per-node panel that
+    /// opens when you click a node on the map (NodeUiPanel).
+    /// </summary>
+    void TradePanel()
     {
         GUILayout.BeginVertical("box", GUILayout.Width(470));
 
-        GUILayout.Label("NODES  (color = owner)", Bold);
-        for (int i = 0; i < S.Nodes.Count; i++)
-        {
-            var n = S.Nodes[i];
-            string owner = n.Owner != null ? n.Owner.Name : "GOVERNMENT";
-            Color ownerColor = GameSimulator.ColorOf(n);
-            string info = (n.Id + 1) + ". " + n.ProducesText()
-                + "  " + n.ProductionPerTick(n.Produced[0]).ToString("0") + "/tick";
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(info, GUILayout.MinWidth(230));
-            GUILayout.Label(owner, CompanyColorStyle(ownerColor), GUILayout.Width(96));
-
-            if (n.Owner == null)
-            {
-                var p = S.Player;
-                float cost = S.GovernmentNodeCost(p);
-                if (GUILayout.Button("Buy " + cost.ToString("0") + "PP", GUILayout.Width(110)))
-                {
-                    string res;
-                    if (!S.BuyGovernmentNode(p, n, out res)) statusMsg = res;
-                }
-            }
-            else if (n.Owner == S.Player)
-            {
-                if (GUILayout.Button("Speed 2x", "minibutton", GUILayout.Width(70)))
-                {
-                    string res;
-                    if (!S.BuildModule(S.Player, n, ModuleType.ProductionBooster, out res)) statusMsg = res;
-                }
-                if (GUILayout.Button("Store 2x", "minibutton", GUILayout.Width(70)))
-                {
-                    string res;
-                    if (!S.BuildModule(S.Player, n, ModuleType.StorageBooster, out res)) statusMsg = res;
-                }
-                GUILayout.Label(n.ModuleCount + "/" + n.MaxSlots + " slots", GUILayout.Width(80));
-            }
-            else
-            {
-                if (GUILayout.Button("Buy...", GUILayout.Width(60)))
-                {
-                    buyNodeIndex = i;
-                    statusMsg = "Selected node " + (n.Id + 1) + " - use the BUY NODE form below.";
-                }
-            }
-            GUILayout.EndHorizontal();
-        }
-
+        GUILayout.Label("TRADE", Bold);
         GUILayout.Space(4);
-        GUILayout.Label("MODULE COSTS  Speed: " + MaterialCatalog.ModuleRecipeText(ModuleType.ProductionBooster)
-            + "   |   Storage: " + MaterialCatalog.ModuleRecipeText(ModuleType.StorageBooster));
 
-        GUILayout.Space(8);
         GUILayout.Label("TRADE RESOURCES (offer MORE value than you request)", Bold);
         tradeTarget = CompanyRow(tradeTarget);
         tradeOfferRes = ResourceRow("Offer:", tradeOfferRes);
@@ -746,6 +730,10 @@ public class GameView : MonoBehaviour
             var t = S.Companies[tradeTarget];
             float ov = tradeOfferAmt * S.market.Price((ResourceType)tradeOfferRes);
             float rv = tradeReqAmt * S.market.Price((ResourceType)tradeReqRes);
+            float theyHave = t.GetInventory((ResourceType)tradeReqRes);
+            GUILayout.Label("THEY HAVE: " + theyHave.ToString("0") + " " + MaterialCatalog.Name((ResourceType)tradeReqRes)
+                + ((theyHave < tradeReqAmt - 0.001f) ? "  - NOT ENOUGH, trade will be REJECTED" : ""),
+                (theyHave < tradeReqAmt - 0.001f) ? RedStyle() : Small);
             GUILayout.Label("Offer " + ov.ToString("0") + " PP vs request " + rv.ToString("0") + " PP  "
                 + ((ov > rv) ? "ACCEPTED" : "TOO LOW"), Bold);
             if (GUILayout.Button("SEND TRADE REQUEST", GUILayout.Width(160)))
@@ -757,45 +745,35 @@ public class GameView : MonoBehaviour
             }
         }
 
-        if (buyNodeIndex >= 0 && buyNodeIndex < S.Nodes.Count)
-        {
-            var n = S.Nodes[buyNodeIndex];
-            if (n.Owner != null && n.Owner != S.Player)
-            {
-                GUILayout.Space(8);
-                GUILayout.BeginHorizontal();
-                GUILayout.Label("BUY NODE " + (n.Id + 1) + " from ", Bold);
-                GUILayout.Label(n.Owner.Name, BoldTinted(n.Owner.Color));
-                GUILayout.EndHorizontal();
-                buyNodeOfferRes = ResourceRow("Offer:", buyNodeOfferRes);
-                buyNodeOfferAmt = AmountRow("", buyNodeOfferAmt);
-                float v = buyNodeOfferAmt * S.market.Price((ResourceType)buyNodeOfferRes);
-                float need = S.CompanyNodeValue(n);
-                GUILayout.Label("Offer " + v.ToString("0") + " PP vs node " + need.ToString("0") + " PP  "
-                    + ((v > need) ? "ACCEPTED" : "TOO LOW"), Bold);
-                if (GUILayout.Button("SEND OFFER", GUILayout.Width(160)))
-                {
-                    string res;
-                    if (!S.BuyNode(S.Player, n, (ResourceType)buyNodeOfferRes, buyNodeOfferAmt, out res))
-                        statusMsg = res;
-                    else buyNodeIndex = -1;
-                }
-            }
-        }
-
         GUILayout.Space(8);
         GUILayout.Label("BUY OUT A COMPANY", Bold);
         buyOutIndex = CompanyRow(buyOutIndex);
-        buyOutOfferRes = ResourceRow("Offer:", buyOutOfferRes);
-        buyOutOfferAmt = AmountRow("", buyOutOfferAmt);
         if (S.Companies.Count > buyOutIndex)
         {
             var seller = S.Companies[buyOutIndex];
             if (seller.Alive && seller != S.Player)
             {
+                float need = S.BuyoutCost(S.Player, seller);
+                GUILayout.Label("Company value: " + need.ToString("0") + " PP  ("
+                    + seller.Nodes.Count + " node" + (seller.Nodes.Count > 1 ? "s" : "") + ", bulk deal)", Bold);
+
+                // ---- option 1: pay directly with earned Political Power ----
+                GUILayout.Label("BUY OUT WITH PP:", Bold);
+                if (S.Player.PoliticalPower < need - 0.001f)
+                    GUILayout.Label("Not enough PP (you have " + S.Player.PoliticalPower.ToString("0") + " PP).", RedStyle());
+                if (GUILayout.Button("BUY OUT  (" + need.ToString("0") + " PP)", GUILayout.Height(34)))
+                {
+                    string res;
+                    if (!S.BuyOutCompanyWithPP(S.Player, seller, out res))
+                        statusMsg = res;
+                }
+
+                // ---- option 2: offer resources worth more than its value ----
+                GUILayout.Space(6);
+                GUILayout.Label("OR offer resources (worth MORE than its value):", Small);
+                buyOutOfferRes = ResourceRow("Offer:", buyOutOfferRes);
+                buyOutOfferAmt = AmountRow("", buyOutOfferAmt);
                 float v = buyOutOfferAmt * S.market.Price((ResourceType)buyOutOfferRes);
-                float need = 0f;
-                foreach (var nn in seller.Nodes) need += S.CompanyNodeValue(nn);
                 GUILayout.Label("Offer " + v.ToString("0") + " PP vs company " + need.ToString("0") + " PP  "
                     + ((v > need) ? "ACCEPTED" : "TOO LOW"), Bold);
                 if (GUILayout.Button("SEND OFFER", GUILayout.Width(160)))
@@ -811,8 +789,8 @@ public class GameView : MonoBehaviour
     }
 
     /// <summary>
-    /// Node info panel - generated when a node is clicked on the map (the
-    /// "node-specific UI" that will eventually replace the old [Nodes] section).
+    /// Node info panel - generated when a node is clicked on the map (the node's
+    /// own buy / upgrade / buy-out panel, replacing the old [Nodes] section).
     /// Shows the node's identity + owner, and the actions available for that owner:
     ///   - government node  -> buy with PP
     ///   - your node        -> build Speed/Storage modules (upgrade)
@@ -832,10 +810,47 @@ public class GameView : MonoBehaviour
         GUILayout.EndHorizontal();
 
         GUILayout.Label(n.ProducesText() + (n.IsFactory ? "  (FACTORY)" : "  (RAW HUB)"));
-        GUILayout.Label("Production: " + n.ProductionPerTick(n.Produced[0]).ToString("0") + " per tick"
+        GUILayout.Label("Base rate: " + n.ProductionPerTick(n.Produced[0]).ToString("0") + " per tick"
             + (n.Produced.Count > 1 ? " (each)" : ""));
         if (n.Inputs.Count > 0)
-            GUILayout.Label("Consumes: " + n.InputsText(), Small);
+            GUILayout.Label("Recipe per 1 output: " + n.InputsText(), Small);
+
+        // Show the node's ACTUAL current output + input burn for its owner, so the
+        // player sees how a Speed-up raises production AND input use, and how a
+        // starved factory runs below its base rate (efficiency of its scarcest input).
+        if (n.Owner != null)
+        {
+            var oc = n.Owner;
+            var outR = n.Produced[0];
+            float space = Mathf.Max(0f,
+                oc.CapacityFor(outR, S.config.BaseCapacityPerResource) - oc.GetInventory(outR));
+            float maxOut = Mathf.Min(n.ProductionPerTick(outR), space);
+            float eff = (maxOut <= 0.0001f) ? 0f : 1f;
+            if (n.Inputs.Count > 0)
+            {
+                foreach (var inR in n.Inputs)
+                {
+                    float ratio = MaterialCatalog.InputAmount(outR, inR);
+                    if (ratio <= 0f) continue;
+                    eff = Mathf.Min(eff, (oc.GetInventory(inR) / ratio) / maxOut);
+                }
+                eff = Mathf.Clamp01(eff);
+            }
+            float actual = maxOut * eff;
+            GUILayout.Label("ACTUAL (owner): " + actual.ToString("0.0") + " " + MaterialCatalog.Name(outR)
+                + " out/tick at " + Mathf.RoundToInt(eff * 100f) + "% supply", Bold);
+            if (n.Inputs.Count > 0)
+            {
+                var parts = new System.Collections.Generic.List<string>();
+                foreach (var inR in n.Inputs)
+                {
+                    float ratio = MaterialCatalog.InputAmount(outR, inR);
+                    if (ratio <= 0f) continue;
+                    parts.Add((actual * ratio).ToString("0.0") + " " + MaterialCatalog.Name(inR));
+                }
+                GUILayout.Label("  -> burns " + string.Join(" + ", parts.ToArray()), Small);
+            }
+        }
         GUILayout.Label("Modules: " + n.ModuleCount + "/" + n.MaxSlots + " slots  (Speed x2 = "
             + Mathf.Pow(2f, n.ProductionModules).ToString("0") + "x, Storage x2 = "
             + Mathf.Pow(2f, n.StorageModules).ToString("0") + "x)");
@@ -848,8 +863,8 @@ public class GameView : MonoBehaviour
 
         if (n.Owner == null)
         {
-            // government node: buy with PP
-            float cost = S.GovernmentNodeCost(p);
+            // government node: buy with PP (costs the same as any rival node to you)
+            float cost = S.NextNodeCost(p);
             GUILayout.Label("Buy from the government for " + cost.ToString("0") + " PP.", Small);
             if (p.PoliticalPower < cost - 0.001f)
                 GUILayout.Label("Not enough PP (you have " + p.PoliticalPower.ToString("0") + " PP).", RedStyle());
@@ -886,7 +901,7 @@ public class GameView : MonoBehaviour
             nodeOfferRes = ResourceRow("Offer:", nodeOfferRes);
             nodeOfferAmt = AmountRow("", nodeOfferAmt);
             float v = nodeOfferAmt * S.market.Price((ResourceType)nodeOfferRes);
-            float need = S.CompanyNodeValue(n);
+            float need = S.NextNodeCost(p);
             float have = p.GetInventory((ResourceType)nodeOfferRes);
             GUILayout.Label("Offer " + v.ToString("0") + " PP vs node " + need.ToString("0") + " PP  "
                 + ((v > need) ? "ACCEPTED" : "TOO LOW"), Bold);
@@ -964,8 +979,10 @@ public class GameView : MonoBehaviour
         }
         if (GUILayout.Button("MAIN MENU", GUILayout.Height(32)))
         {
+            // NOTE: no early `return` here - EndArea() below must always run,
+            // otherwise the BeginArea(851) is left unclosed and IMGUI throws
+            // "Invalid GUILayout state ... Begin/End calls match".
             GameFlow.OpenMenu();
-            return;
         }
         GUILayout.EndArea();
     }
@@ -1062,25 +1079,25 @@ public class GameView : MonoBehaviour
 
     static readonly string KeyCompany = "showCompany";
     static readonly string KeyPrices  = "showPrices";
-    static readonly string KeyNodes   = "showNodes";
+    static readonly string KeyTrade   = "showTrade";
 
     bool showCompany = true;
     bool showPrices  = true;
-    bool showNodes   = true;
+    bool showTrade   = true;
     bool showInfo    = false;
 
     void LoadToggles()
     {
         if (PlayerPrefs.HasKey(KeyCompany)) showCompany = PlayerPrefs.GetInt(KeyCompany, 1) == 1;
         if (PlayerPrefs.HasKey(KeyPrices))  showPrices  = PlayerPrefs.GetInt(KeyPrices,  1) == 1;
-        if (PlayerPrefs.HasKey(KeyNodes))   showNodes   = PlayerPrefs.GetInt(KeyNodes,   1) == 1;
+        if (PlayerPrefs.HasKey(KeyTrade))   showTrade   = PlayerPrefs.GetInt(KeyTrade,   1) == 1;
     }
 
     void SaveToggles()
     {
         PlayerPrefs.SetInt(KeyCompany, showCompany ? 1 : 0);
         PlayerPrefs.SetInt(KeyPrices,  showPrices  ? 1 : 0);
-        PlayerPrefs.SetInt(KeyNodes,   showNodes   ? 1 : 0);
+        PlayerPrefs.SetInt(KeyTrade,   showTrade   ? 1 : 0);
         PlayerPrefs.Save();
     }
 
@@ -1235,7 +1252,7 @@ public class GameView : MonoBehaviour
         GUILayout.Label("    stock/limit shows how full you are; TOTAL INVENTORY VALUE is what the tax can be taken from.");
         GUILayout.Label("    If your inventory value is BELOW the tax due, the tax FAILS and the government takes your WHOLE inventory.");
         GUILayout.Label("7.  Spend PP on government nodes, or offer resources worth MORE than a node / company is worth to buy it");
-        GUILayout.Label("    from its owner ([Nodes] panel).");
+        GUILayout.Label("    from its owner (click the node on the map for its own panel; [Trade] panel for company buyouts).");
         GUILayout.Label("8.  FAIL a tax " + S.config.BankruptAtFails + " times in a row and the government seizes your company - game over.");
         GUILayout.Space(4);
         GUILayout.Label("Tip: the top-bar checkboxes hide/show panels - your choice is remembered between games.", Small);
@@ -1302,10 +1319,12 @@ public class GameView : MonoBehaviour
 
         // ---- acquisition rules ----
         GUILayout.Label("ACQUIRING NODES & COMPANIES", Bold);
-        GUILayout.Label("   Government node:  " + S.config.NodeBaseValue.ToString("0")
-            + " PP + " + Mathf.RoundToInt(S.config.NodeCostGrowth * 100f) + "% per node you already own (it grows as you expand)");
-        GUILayout.Label("   Company node:     offer resources worth MORE than the node's value, at today's prices");
-        GUILayout.Label("   Company buyout:   offer resources worth MORE than ALL its nodes combined");
+        GUILayout.Label("   Node cost:        " + S.config.NodeBaseValue.ToString("0") + " PP x ("
+            + S.config.NodeCostGrowthMult.ToString("0.00") + ")^nodes you own  - exponential, e.g. ~1x, ~1.4x, ~3x, ~10x, ~20x");
+        GUILayout.Label("   Government node:  costs you that next-node price (PP) - SAME as buying a rival's node, so no loophole");
+        GUILayout.Label("   Company node:     offer resources worth MORE than that next-node price, at today's prices");
+        GUILayout.Label("   Company buyout:   cost = N x that price / " + S.config.BuyoutCostFactor.ToString("0") + " (N = its node count)");
+        GUILayout.Label("                    pay it in PP directly, or offer resources worth MORE than the cost");
         GUILayout.Label("   Trades:           accepted only when you offer MORE value (PP) than you request");
     }
 }
