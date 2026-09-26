@@ -42,17 +42,46 @@ GameView.Update (via GameSimulator)
 ## 2. MAKE THE GAME USABLE (do these in order)
 
 ### Task 1 — Run it (5 minutes, proves the game works)
-- [ ] Open Unity, open **Assets/Scenes/SampleScene.unity**
-- [ ] Create an empty GameObject, name it `Game`
-- [ ] Add the **`GameView`** component to it (Add Component → GameView)
-  - That's it. `GameView.Awake` auto-creates `GameSimulator` and `Start` calls `NewGame()`.
-  - (Optional: add `GameSimulator` yourself and drag it into `GameView`'s `sim` field — not required.)
-- [ ] Press **Play**. You should see:
-  - a flat 5x4 map of colored areas (green = you, red/blue/yellow = AI, gray = government),
-  - cylinder = raw hub, cube = factory,
-  - IMGUI UI: top bar (tick counter, speed slider, TICK / TAX NOW / RESTART),
-    Your Company panel, Government Prices panel, Nodes panel, Trade form, Log.
-- [ ] Save the scene.
+- [ ] Open Unity, open **Assets/Scenes/MenuScene.unity** (the start screen —
+      both scenes are in Build Settings, menu first)
+- [ ] Press **Play**. You should see the **MAP SETUP** screen:
+  - left: map mode (premade vs fully random), the 5 premade maps, every
+    setting (seed, node count, mix, companies, PP, tax, tick length),
+    presets (save/load/delete), export/import for sharing a setup, START GAME
+  - right: text-grid map preview + ownership color legend
+  - in the scene: a **live 3D preview** of the map (pan/zoom with the mouse,
+    WASD, middle-mouse drag = camera angle) — it rebuilds as you edit
+- [ ] Pick a map (e.g. Classic 5x4), press **START GAME**
+- [ ] In the game you should see:
+  - a flat map with ground, and placeholder node shapes (see the shape list
+    below), colored by owner (green = you, red/blue/yellow = AI, gray = government)
+  - floating labels above each node (type + production)
+  - IMGUI UI: top bar (tick counter, speed slider, TICK / TAX NOW / RESTART / **MENU**),
+    Your Company panel, Government Prices panel, Nodes panel, Trade form, Log
+- [ ] **MENU** (top bar) goes back to the setup screen; the game scene
+      auto-redirects there if you open it directly
+- [ ] Save the scene
+
+### Task 1b — New Inspector checklist (node-prefabs + camera + menu)
+`GameView` (in SampleScene, object "gameconfig"):
+- [ ] **Node Prefabs** slots — drag your prefabs in when they exist
+      (Wood/Metal/Energy/Water + Chips/MechParts/Building/Food).
+      Empty slot = placeholder shape (NodeShapes). "Use prefabs" toggle off
+      = always placeholders.
+- [ ] **Map Terrain** — renderGround + ground/water colors.
+`CameraController` (auto-created, or drag it onto the camera):
+- [ ] pan speed, zoom min/max, wheel strength, angle min/max, edge scroll,
+      smoothing — all tunable here.
+`MenuView` (in MenuScene, object "Menu"):
+- [ ] **Premade Maps** array — already has the 5 maps from Assets/Maps;
+      drag in new MapDefinition assets and they appear in the menu.
+      (Create new ones: Assets > Create > Recource > Map Definition.)
+
+### Task 1c — Placeholder node shapes (Q10, until real prefabs)
+- Wood = cylinder | Metal = ball | Energy = cube | Water = triangle (cone)
+- Dual hub = the two types, shrunk, in a checkerboard (same type on opposite corners)
+- Chips = two balls stacked | Mech Parts = cylinder + cube |
+  Building Materials = cube + ball | Food = triangle + ball
 
 ### Task 2 — Play a full game (test loop)
 - [ ] Set the **Speed slider** to ~10s (top bar) so a game takes ~10–20 min.

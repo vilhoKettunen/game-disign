@@ -72,7 +72,9 @@ public class GameSimulator : MonoBehaviour
 
     void Start()
     {
-        if (Nodes.Count == 0) NewGame();
+        // A GameView in the scene owns game start (it applies the menu's map +
+        // settings, map-setup-plan Q4) - don't double-create a game.
+        if (Nodes.Count == 0 && FindObjectsOfType<GameView>().Length == 0) NewGame();
     }
 
     void Update()
@@ -89,26 +91,14 @@ public class GameSimulator : MonoBehaviour
 
     // ================= NEW GAME (core-loop Q8, tax-plan Q6) =================
 
+    /// <summary>
+    /// Quick restart with the config's own settings (RESTART button) and the
+    /// original random 5-column layout. New map/seed/mix games come from the
+    /// menu: MenuView -> MapGenerator -> NewGameWithSpecs (map-setup-plan Q4).
+    /// </summary>
     public void NewGame()
     {
-        Companies.Clear();
-        Nodes.Clear();
-        Log.Clear();
-        TickCount = 0;
-        TicksUntilTax = config.TaxEveryTicks;
-        GameOver = false;
-        Winner = null;
-        GameOverText = "";
-        timeAccumulator = 0f;
-
-        for (int i = 0; i < config.CompanyCount; i++)
-        {
-            var c = new Company(i, (i == 0) ? "Your Company" : "AI Company " + (i + 1),
-                                CompanyColors[i % CompanyColors.Length], i == 0);
-            c.PoliticalPower = config.StartingPoliticalPower;
-            Companies.Add(c);
-        }
-
+        var specs = new List<Node>();
         int rawCursor = 0;
         for (int i = 0; i < config.TotalNodes; i++)
         {
@@ -147,6 +137,49 @@ public class GameSimulator : MonoBehaviour
             n.Position = new Vector2((i % 5) * 5f, (i / 5) * 5f);
             n.Name = (i + 1) + ". " + n.ProducesText()
                    + ((n.Inputs.Count > 0) ? " (factory, needs " + n.InputsText() + ")" : "");
+            specs.Add(n);
+        }
+        NewGameWithSpecs(specs, null);
+    }
+
+    /// <summary>
+    /// Start a game with nodes generated from a map + settings
+    /// (map-setup-plan.txt section 2, the clean cut). <paramref name="setup"/>
+    /// is applied to the config (companies, starting PP, tax, tick length).
+    /// </summary>
+    public void NewGameWithSpecs(List<Node> specs, GameSetup setup)
+    {
+        if (setup != null)
+        {
+            config.CompanyCount = Mathf.Clamp(setup.companyCount, 1, 8);
+            config.StartingPoliticalPower = setup.startingPP;
+            config.TaxEveryTicks = Mathf.Max(1, Mathf.RoundToInt(setup.taxEveryTicks));
+            config.TaxRate = Mathf.Clamp01(setup.taxRatePct / 100f);
+            config.TickSeconds = Mathf.Clamp(setup.tickSeconds, 1f, 3600f);
+        }
+
+        Companies.Clear();
+        Nodes.Clear();
+        Log.Clear();
+        TickCount = 0;
+        TicksUntilTax = config.TaxEveryTicks;
+        GameOver = false;
+        Winner = null;
+        GameOverText = "";
+        timeAccumulator = 0f;
+
+        for (int i = 0; i < config.CompanyCount; i++)
+        {
+            var c = new Company(i, (i == 0) ? "Your Company" : "AI Company " + (i + 1),
+                                CompanyColors[i % CompanyColors.Length], i == 0);
+            c.PoliticalPower = config.StartingPoliticalPower;
+            Companies.Add(c);
+        }
+
+        for (int i = 0; i < specs.Count; i++)
+        {
+            var n = specs[i];
+            n.Id = i;
             Nodes.Add(n);
         }
 

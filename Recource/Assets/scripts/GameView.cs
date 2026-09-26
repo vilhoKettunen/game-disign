@@ -1,5 +1,7 @@
-﻿using System.Globalization;
+﻿using System.Collections.Generic;
+using System.Globalization;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 /// <summary>
 /// Visual + UI layer. Attach to ANY GameObject in the scene (it auto-creates
@@ -23,10 +25,36 @@ public class GameView : MonoBehaviour
 
     GameObject mapRoot;
     Renderer[] nodeAreaRenderers;
-    Renderer[] nodeMarkerRenderers;
+    Renderer[][] nodeMarkerRenderers;
     TextMesh[] nodeLabels;
 
     string statusMsg = "";
+
+    // ---- node prefabs (node-prefabs-camera-plan section 3; author your art, drag it in) ----
+    [Header("Node Prefabs (empty slot = placeholder shape from NodeShapes)")]
+    public bool usePrefabs = true;
+    [Tooltip("Raw hubs: Wood / Metal / Energy / Water (dual hubs show the two types in a checkerboard).")]
+    public GameObject prefabWood;
+    public GameObject prefabMetal;
+    public GameObject prefabEnergy;
+    public GameObject prefabWater;
+    [Tooltip("Factories: Chips / Mech Parts / Building Materials / Food.")]
+    public GameObject prefabChips;
+    public GameObject prefabMechParts;
+    public GameObject prefabBuilding;
+    public GameObject prefabFood;
+
+    // ---- map terrain (map-setup-plan Q8: ground for empty slots, water for lakes) ----
+    [Header("Map Terrain (map-setup-plan Q8)")]
+    [Tooltip("Render ground under every non-water cell so the map shape reads (off = nodes only).")]
+    public bool renderGround = true;
+    public Color groundColor = new Color(0.30f, 0.34f, 0.32f);
+    public Color waterColor = new Color(0.14f, 0.26f, 0.42f);
+
+    // map generation state (menu -> MapGenerator -> this scene)
+    MapDefinition currentMap;
+    List<Node> currentSpecs;
+    Vector2 currentExtent;
 
     // trade form state
     int tradeTarget = 1;
@@ -42,6 +70,12 @@ public class GameView : MonoBehaviour
     int buyOutIndex = 1;
     int buyOutOfferRes = 0;
     float buyOutOfferAmt = 100f;
+
+    // ---- node info UI (click a node on the map -> panel on the right) ----
+    int selectedNode = -1;   // node index whose info panel is open (-1 = none)
+    int hoverNode = -1;      // node index under the cursor (highlighted)
+    int nodeOfferRes = 0;    // resource offered when buying a company-owned node
+    float nodeOfferAmt = 20f;
 
     GUIStyle _bold;
     GUIStyle Bold
@@ -67,6 +101,25 @@ public class GameView : MonoBehaviour
 
     void Awake()
     {
+        // boot flow (map-setup-plan Q3/Q4): the menu scene is the start screen;
+        // the game scene only auto-starts a game when the menu started it.
+        if (!GameFlow.CameFromMenu)
+        {
+            if (Application.isBatchMode)
+            {
+                var s = new GameSetup();
+                GameFlow.LastSetup = s;
+                GameFlow.LastMap = null;
+            }
+            else
+            {
+                GameFlow.OpenMenu();
+                return;
+            }
+        }
+        if (GameFlow.LastSetup == null)
+            GameFlow.LastSetup = new GameSetup();
+
         S = sim;
         if (S == null) S = GetComponent<GameSimulator>();
         if (S == null)
@@ -81,10 +134,80 @@ public class GameView : MonoBehaviour
 
     void Start()
     {
-        if (S.Nodes.Count == 0) S.NewGame();
+        if (S.Nodes.Count == 0)
+        {
+            // map-setup-plan Q4: start from the menu's choice (map + seed + settings)
+            Random.InitState(GameFlow.LastSetup.seed);
+            MapGenerator.Generate(currentSpecs = new List<Node>(),
+                                  GameFlow.LastMap, GameFlow.LastSetup);
+            S.NewGameWithSpecs(currentSpecs, GameFlow.LastSetup);
+        }
+        currentMap = (GameFlow.LastMap != null) ? GameFlow.LastMap : null;
         BuildMap();
         SetupCamera();
         SetupCameraController();
+    }
+
+    /// <summary>
+    /// Node picking (the "click a node -> node info UI" feature):
+    ///   - LEFT-CLICK a node on the map opens its info panel (buy / build modules / buy out).
+    ///   - LEFT-CLICK empty map space closes the panel.
+    ///   - Hovering a node highlights its ownership area so the cursor has feedback.
+    /// Uses the new Input System (Mouse). Picking is a simple raycast onto the y=0 map
+    /// plane; the closest node within a pick radius wins. While an IMGUI control is
+    /// being pressed (GUIUtility.hotControl != 0) picking is suppressed, exactly like
+    /// CameraController does, so clicking the panels never selects a node behind them.
+    /// </summary>
+    void Update()
+    {
+        if (S == null || S.Nodes.Count == 0) return;
+        var cam = Camera.main;
+        if (cam == null) return;
+
+        var mouse = Mouse.current;
+        if (mouse == null) return;
+
+        bool uiBusy = (GUIUtility.hotControl != 0);
+        Vector2 m = mouse.position.value;
+
+        // raycast onto the flat map plane (y = 0)
+        Ray ray = cam.ScreenPointToRay(m);
+        if (Mathf.Abs(ray.direction.y) < 1e-5f) return;
+        float t = -cam.transform.position.y / ray.direction.y;
+        if (t < 0f) return;
+        Vector3 hit = ray.origin + ray.direction * t;
+
+        // nearest node within the pick radius (~2.4 matches the ~4.5-unit node footprint,
+        // and stays under half the 5-unit grid spacing so clicks in the gap don't select)
+        int best = -1;
+        float bestD = 2.4f;
+        for (int i = 0; i < S.Nodes.Count; i++)
+        {
+            var n = S.Nodes[i];
+            float d = Vector3.Distance(hit, new Vector3(n.Position.x, 0f, n.Position.y));
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        hoverNode = best;
+
+        // visual feedback: reset every area to its base ownership color, then brighten
+        // the hovered node and the selected node (so leaving a node fades it back out)
+        if (mapRoot != null && nodeAreaRenderers != null)
+        {
+            for (int i = 0; i < S.Nodes.Count && i < nodeAreaRenderers.Length; i++)
+            {
+                Color c = GameSimulator.ColorOf(S.Nodes[i]);
+                if (i == selectedNode) c = Brighten(c, 1.6f);
+                else if (i == hoverNode) c = Brighten(c, 1.25f);
+                nodeAreaRenderers[i].material.color = c;
+            }
+        }
+
+        if (uiBusy) return; // a panel control is being used -> don't pick
+
+        if (mouse.leftButton.wasPressedThisFrame)
+        {
+            selectedNode = (best >= 0) ? best : -1;
+        }
     }
 
     void OnDestroy()
@@ -99,16 +222,19 @@ public class GameView : MonoBehaviour
         if (mapRoot != null) Destroy(mapRoot);
         mapRoot = new GameObject("NodeMap");
 
+        // ---- map terrain (map-setup-plan Q8): ground for empty slots, water for "0" cells ----
+        BuildTerrain(mapRoot.transform);
+
         int count = S.Nodes.Count;
         nodeAreaRenderers = new Renderer[count];
-        nodeMarkerRenderers = new Renderer[count];
+        nodeMarkerRenderers = new Renderer[count][];
         nodeLabels = new TextMesh[count];
 
         for (int i = 0; i < count; i++)
         {
             var n = S.Nodes[i];
 
-            // colored plain = ownership area
+            // colored plain = ownership area (Q2: the prefab/shape carries the identity)
             var area = GameObject.CreatePrimitive(PrimitiveType.Plane);
             area.name = "Area_" + n.Id;
             area.transform.SetParent(mapRoot.transform, false);
@@ -118,22 +244,20 @@ public class GameView : MonoBehaviour
             SetColor(area, GameSimulator.ColorOf(n));
             nodeAreaRenderers[i] = area.GetComponent<Renderer>();
 
-            // node marker: cylinder = raw hub, cube = factory
-            var marker = GameObject.CreatePrimitive(n.IsFactory ? PrimitiveType.Cube : PrimitiveType.Cylinder);
-            marker.name = "Node_" + n.Id;
-            marker.transform.SetParent(area.transform, false);
-            marker.transform.localPosition = new Vector3(0f, 0.9f, 0f);
-            marker.transform.localScale = new Vector3(0.7f, 1.4f, 0.7f);
-            RemoveCollider(marker);
-            SetColor(marker, Brighten(GameSimulator.ColorOf(n), 1.25f));
-            nodeMarkerRenderers[i] = marker.GetComponent<Renderer>();
+            // node body: your prefab if assigned (slot = Produced[0] + IsFactory),
+            // else the placeholder shapes (node-prefabs-camera-plan Q10)
+            var nodeGo = new GameObject("Node_" + n.Id);
+            nodeGo.transform.SetParent(area.transform, false);
+            nodeGo.transform.localPosition = Vector3.zero;
+            nodeMarkerRenderers[i] = BuildNodeVisual(nodeGo.transform, n);
 
-            // label
+            // floating label above the node (Q8: type + production + owner color)
             var labelGo = new GameObject("Label_" + n.Id);
             labelGo.transform.SetParent(area.transform, false);
-            labelGo.transform.localPosition = new Vector3(0f, 2.4f, 0f);
+            labelGo.transform.localPosition = new Vector3(0f, 3.6f, 0f);
             var tm = labelGo.AddComponent<TextMesh>();
-            var f = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            // Unity 6: "Arial.ttf" is no longer a valid built-in font -> use "LegacyRuntime.ttf"
+            var f = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             if (f != null) tm.font = f;
             tm.text = ShortName(n);
             tm.fontSize = 40;
@@ -142,6 +266,157 @@ public class GameView : MonoBehaviour
             tm.alignment = TextAlignment.Center;
             nodeLabels[i] = tm;
         }
+
+        UpdateMapBounds();
+    }
+
+    /// <summary>
+    /// Ground + water tiles for the current map (map-setup-plan Q8). Random
+    /// maps have no shape -> a ground rectangle just large enough for the nodes.
+    /// </summary>
+    void BuildTerrain(Transform parent)
+    {
+        if (!renderGround && currentMap == null) return;
+
+        if (currentMap != null)
+        {
+            float g = MapDefinition.GridSpacing;
+            for (int r = 0; r < currentMap.Rows; r++)
+            {
+                for (int c = 0; c < currentMap.Cols; c++)
+                {
+                    char cell = currentMap.CellAt(r, c);
+                    bool water = currentMap.IsWater(cell);
+                    if (!water && !renderGround) continue;
+
+                    var go = GameObject.CreatePrimitive(water ? PrimitiveType.Cube : PrimitiveType.Plane);
+                    go.name = (water ? "Water_" : "Ground_") + r + "_" + c;
+                    go.transform.SetParent(parent, false);
+                    if (water)
+                        go.transform.localScale = new Vector3(g * 0.98f, 0.2f, g * 0.98f);
+                    else
+                        go.transform.localScale = new Vector3(0.45f, 0.45f, 0.45f);
+                    go.transform.position = new Vector3(
+                        (c - (currentMap.Cols - 1) * 0.5f) * g,
+                        water ? -0.11f : (water ? 0f : 0.02f),
+                        (r - (currentMap.Rows - 1) * 0.5f) * g);
+                    RemoveCollider(go);
+                    SetColor(go, water ? waterColor : groundColor);
+                }
+            }
+        }
+        else if (renderGround)
+        {
+            // random map: one big ground sheet under the node field
+            Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
+            Vector2 max = new Vector2(float.MinValue, float.MinValue);
+            for (int i = 0; i < S.Nodes.Count; i++)
+            {
+                var p = S.Nodes[i].Position;
+                min = new Vector2(Mathf.Min(min.x, p.x), Mathf.Min(min.y, p.y));
+                max = new Vector2(Mathf.Max(max.x, p.x), Mathf.Max(max.y, p.y));
+            }
+            float w = Mathf.Max(MapDefinition.GridSpacing, max.x - min.x + 2f * MapDefinition.GridSpacing);
+            float d = Mathf.Max(MapDefinition.GridSpacing, max.y - min.y + 2f * MapDefinition.GridSpacing);
+            var go = GameObject.CreatePrimitive(PrimitiveType.Plane);
+            go.name = "Ground_Random";
+            go.transform.SetParent(parent, false);
+            go.transform.localScale = new Vector3(w / 10f, d / 10f, 1f);
+            go.transform.position = new Vector3((min.x + max.x) * 0.5f, 0f, (min.y + max.y) * 0.5f);
+            RemoveCollider(go);
+            SetColor(go, groundColor);
+        }
+    }
+
+    /// <summary>
+    /// The node's body: your prefab if the slot is filled, else the placeholder
+    /// shapes. Returns every part's renderer so Refresh() can tint ownership.
+    /// </summary>
+    Renderer[] BuildNodeVisual(Transform parent, Node n)
+    {
+        GameObject body = null;
+        if (usePrefabs)
+        {
+            var p = PrefabFor(n);
+            if (p != null)
+            {
+                body = Instantiate(p, parent);
+                body.name = "Prefab_" + n.Id;
+                body.transform.localPosition = Vector3.zero;
+                // authoring notes (plan section 4): no colliders/scripts on the prefab;
+                // strip defensively so the node stays click-transparent
+                foreach (var c in body.GetComponents<Collider>()) Destroy(c);
+            }
+        }
+        if (body == null)
+            body = NodeShapes.Build(parent, n);
+
+        var parts = body.GetComponentsInChildren<Renderer>();
+        var list = new Renderer[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+        {
+            if (parts[i].sharedMaterial == null) continue;
+            parts[i].material.color = Brighten(GameSimulator.ColorOf(n), 1.25f);
+            list[i] = parts[i];
+        }
+        return list;
+    }
+
+    /// <summary>Slot = Produced[0] + IsFactory (node-prefabs-camera-plan section 3).</summary>
+    GameObject PrefabFor(Node n)
+    {
+        if (n.Produced.Count == 0) return null;
+        var r = n.Produced[0];
+        if (n.IsFactory)
+        {
+            switch (r)
+            {
+                case ResourceType.Chips: return prefabChips;
+                case ResourceType.MechanicalParts: return prefabMechParts;
+                case ResourceType.BuildingMaterials: return prefabBuilding;
+                case ResourceType.Food: return prefabFood;
+            }
+        }
+        else
+        {
+            switch (r)
+            {
+                case ResourceType.Wood: return prefabWood;
+                case ResourceType.Metal: return prefabMetal;
+                case ResourceType.Energy: return prefabEnergy;
+                case ResourceType.Water: return prefabWater;
+            }
+        }
+        return null;
+    }
+
+    void UpdateMapBounds()
+    {
+        var cc = CameraController.Instance;
+        if (cc == null) return;
+        if (S == null || S.Nodes.Count == 0)
+        {
+            cc.SetMapBounds(Vector2.zero, new Vector2(10f, 10f));
+            return;
+        }
+        Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
+        Vector2 max = new Vector2(float.MinValue, float.MinValue);
+        for (int i = 0; i < S.Nodes.Count; i++)
+        {
+            var p = S.Nodes[i].Position;
+            min = new Vector2(Mathf.Min(min.x, p.x), Mathf.Min(min.y, p.y));
+            max = new Vector2(Mathf.Max(max.x, p.x), Mathf.Max(max.y, p.y));
+        }
+        if (currentMap != null)
+        {
+            // include the shape edges (water + ground read as map)
+            Vector2 emin = currentMap.CellCenter(0, 0);
+            Vector2 emax = currentMap.CellCenter(currentMap.Rows - 1, currentMap.Cols - 1);
+            min = new Vector2(Mathf.Min(min.x, emin.x - 2.5f), Mathf.Min(min.y, emin.y - 2.5f));
+            max = new Vector2(Mathf.Max(max.x, emax.x + 2.5f), Mathf.Max(max.y, emax.y + 2.5f));
+        }
+        currentExtent = max - min;
+        cc.SetMapBounds(min, max);
     }
 
     void Refresh()
@@ -152,7 +427,12 @@ public class GameView : MonoBehaviour
             var n = S.Nodes[i];
             Color c = GameSimulator.ColorOf(n);
             nodeAreaRenderers[i].material.color = c;
-            nodeMarkerRenderers[i].material.color = Brighten(c, 1.25f);
+            if (nodeMarkerRenderers[i] != null)
+            {
+                for (int p = 0; p < nodeMarkerRenderers[i].Length; p++)
+                    if (nodeMarkerRenderers[i][p] != null)
+                        nodeMarkerRenderers[i][p].material.color = Brighten(c, 1.25f);
+            }
             string shortName = ShortName(n);
             if (nodeLabels[i] != null)
             {
@@ -244,7 +524,9 @@ public class GameView : MonoBehaviour
     {
         if (S == null || S.Nodes.Count == 0)
         {
+            // menu -> game scene: the game hasn't started yet (map-setup-plan Q4)
             GUILayout.Label("Starting game...");
+            if (GUILayout.Button("BACK TO MENU", GUILayout.Width(160))) GameFlow.OpenMenu();
             return;
         }
 
@@ -259,6 +541,8 @@ public class GameView : MonoBehaviour
         if (GUILayout.Button("TICK", GUILayout.Width(55))) S.ForceTick();
         if (GUILayout.Button("TAX NOW", GUILayout.Width(80))) S.ForceTax();
         if (GUILayout.Button("RESTART", GUILayout.Width(80))) S.NewGame();
+        // map-setup-plan Q4: "back to menu" goes back to the setup screen
+        if (GUILayout.Button("MENU", GUILayout.Width(70))) GameFlow.OpenMenu();
         GUILayout.Space(12);
 
         // panel toggles (choice is remembered between games)
@@ -275,12 +559,17 @@ public class GameView : MonoBehaviour
             GUILayout.Label(statusMsg, GUILayout.Width(1000));
 
         // ---- main panels (only the visible ones) ----
-        if (showCompany || showPrices || showNodes)
+        // The node info panel is a separate docked panel: it shows whenever a node is
+        // selected on the map, independent of the Company/Prices/Nodes toggles, so it
+        // survives the later removal of the old [Nodes] section.
+        bool nodeUiOpen = (selectedNode >= 0 && selectedNode < S.Nodes.Count);
+        if (showCompany || showPrices || showNodes || nodeUiOpen)
         {
             GUILayout.BeginHorizontal();
             if (showCompany) CompanyPanel();
             if (showPrices)  MarketPanel();
             if (showNodes)   NodePanel();
+            if (nodeUiOpen)  NodeUiPanel(S.Nodes[selectedNode]);
             GUILayout.EndHorizontal();
         }
 
@@ -521,6 +810,99 @@ public class GameView : MonoBehaviour
         GUILayout.EndVertical();
     }
 
+    /// <summary>
+    /// Node info panel - generated when a node is clicked on the map (the
+    /// "node-specific UI" that will eventually replace the old [Nodes] section).
+    /// Shows the node's identity + owner, and the actions available for that owner:
+    ///   - government node  -> buy with PP
+    ///   - your node        -> build Speed/Storage modules (upgrade)
+    ///   - another company  -> buy with a resource offer
+    /// </summary>
+    void NodeUiPanel(Node n)
+    {
+        string owner = n.Owner != null ? n.Owner.Name : "GOVERNMENT";
+        Color ownerColor = GameSimulator.ColorOf(n);
+
+        GUILayout.BeginVertical("box", GUILayout.Width(300));
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("NODE " + (n.Id + 1), Bold);
+        GUILayout.FlexibleSpace();
+        if (GUILayout.Button("✕", "minibutton", GUILayout.Width(24))) selectedNode = -1;
+        GUILayout.EndHorizontal();
+
+        GUILayout.Label(n.ProducesText() + (n.IsFactory ? "  (FACTORY)" : "  (RAW HUB)"));
+        GUILayout.Label("Production: " + n.ProductionPerTick(n.Produced[0]).ToString("0") + " per tick"
+            + (n.Produced.Count > 1 ? " (each)" : ""));
+        if (n.Inputs.Count > 0)
+            GUILayout.Label("Consumes: " + n.InputsText(), Small);
+        GUILayout.Label("Modules: " + n.ModuleCount + "/" + n.MaxSlots + " slots  (Speed x2 = "
+            + Mathf.Pow(2f, n.ProductionModules).ToString("0") + "x, Storage x2 = "
+            + Mathf.Pow(2f, n.StorageModules).ToString("0") + "x)");
+        GUILayout.Label("Owner: " + owner, BoldTinted(ownerColor));
+
+        GUILayout.Space(8);
+
+        // ---- action area: depends on who owns the node ----
+        var p = S.Player;
+
+        if (n.Owner == null)
+        {
+            // government node: buy with PP
+            float cost = S.GovernmentNodeCost(p);
+            GUILayout.Label("Buy from the government for " + cost.ToString("0") + " PP.", Small);
+            if (p.PoliticalPower < cost - 0.001f)
+                GUILayout.Label("Not enough PP (you have " + p.PoliticalPower.ToString("0") + " PP).", RedStyle());
+            if (GUILayout.Button("BUY NODE  (" + cost.ToString("0") + " PP)", GUILayout.Height(34)))
+            {
+                string res;
+                if (!S.BuyGovernmentNode(p, n, out res)) statusMsg = res;
+            }
+        }
+        else if (n.Owner == p)
+        {
+            // your node: upgrade it
+            GUILayout.Label("UPGRADE (each module doubles its effect)", Small);
+            if (GUILayout.Button("BUILD SPEED BOOSTER  (2x production)", GUILayout.Height(30)))
+            {
+                string res;
+                if (!S.BuildModule(p, n, ModuleType.ProductionBooster, out res)) statusMsg = res;
+            }
+            if (GUILayout.Button("BUILD STORAGE BOOSTER  (2x storage)", GUILayout.Height(30)))
+            {
+                string res;
+                if (!S.BuildModule(p, n, ModuleType.StorageBooster, out res)) statusMsg = res;
+            }
+            if (!n.HasFreeSlot)
+                GUILayout.Label("No free slots left - cannot build more modules.", RedStyle());
+            GUILayout.Space(4);
+            GUILayout.Label("Cost  Speed: " + MaterialCatalog.ModuleRecipeText(ModuleType.ProductionBooster), Small);
+            GUILayout.Label("       Storage: " + MaterialCatalog.ModuleRecipeText(ModuleType.StorageBooster), Small);
+        }
+        else
+        {
+            // another company's node: buy with a resource offer worth MORE than its value
+            GUILayout.Label("Buy from " + n.Owner.Name + " with a resource offer worth MORE than its value.", Small);
+            nodeOfferRes = ResourceRow("Offer:", nodeOfferRes);
+            nodeOfferAmt = AmountRow("", nodeOfferAmt);
+            float v = nodeOfferAmt * S.market.Price((ResourceType)nodeOfferRes);
+            float need = S.CompanyNodeValue(n);
+            float have = p.GetInventory((ResourceType)nodeOfferRes);
+            GUILayout.Label("Offer " + v.ToString("0") + " PP vs node " + need.ToString("0") + " PP  "
+                + ((v > need) ? "ACCEPTED" : "TOO LOW"), Bold);
+            if (nodeOfferAmt > have + 0.001f)
+                GUILayout.Label("You only have " + have.ToString("0") + " " + MaterialCatalog.Name((ResourceType)nodeOfferRes) + ".", RedStyle());
+            if (GUILayout.Button("SEND OFFER", GUILayout.Height(34)))
+            {
+                string res;
+                if (!S.BuyNode(p, n, (ResourceType)nodeOfferRes, nodeOfferAmt, out res)) statusMsg = res;
+                else selectedNode = -1;
+            }
+        }
+
+        GUILayout.EndVertical();
+    }
+
     void LogPanel()
     {
         GUILayout.BeginVertical("box", GUILayout.Width(1000));
@@ -569,8 +951,21 @@ public class GameView : MonoBehaviour
         }
         if (GUILayout.Button("PLAY AGAIN", GUILayout.Height(40)))
         {
-            S.NewGame();
+            // same map + seed as this run (map-setup-plan Q4)
+            if (GameFlow.LastSetup != null)
+            {
+                Random.InitState(GameFlow.LastSetup.seed);
+                MapGenerator.Generate(currentSpecs = new List<Node>(),
+                                      GameFlow.LastMap, GameFlow.LastSetup);
+                S.NewGameWithSpecs(currentSpecs, GameFlow.LastSetup);
+            }
+            else S.NewGame();
             statusMsg = "";
+        }
+        if (GUILayout.Button("MAIN MENU", GUILayout.Height(32)))
+        {
+            GameFlow.OpenMenu();
+            return;
         }
         GUILayout.EndArea();
     }

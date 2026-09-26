@@ -108,18 +108,35 @@ with a "NEW GAME" button to re-open it? [default: both - auto-show at start +
 ---
 
 ## 6. IMPLEMENTATION ORDER (what I will write, in order)
-1. `MapDefinition.cs` - ScriptableObject shape grid + legend + helpers
-   (slot count, validation, preview text).
-2. `MapGenerator.cs` - `(mapDef | null) + settings + seed -> List<Node>`
-   (positions from shape, types from mix/seed). Reuses MaterialCatalog.
-3. `GameSimulator` - `NewGameWithSpecs(List<Node> nodes, GameConfig cfg)`;
-   `NewGame()` becomes a thin wrapper (random 5-col grid, as today) so
-   nothing breaks.
-4. `GameView` - setup screen (IMGUI), NEW GAME button, pass-through to
-   simulator. Existing RESTART keeps working.
-5. 2-3 premade `MapDefinition` assets (e.g. "Classic 5x4", "River bend",
-   "Islands") so the setup screen has something to pick.
-6. `dev-tasks.txt` / this file: mark done, add Inspector checklist.
+[STATUS 2025: EXECUTED - build clean]
+1. [x] MapDefinition.cs - ScriptableObject shape grid + legend + helpers.
+       Legend: W/M/E/a pinned raw, C/P/B/F pinned factories, R any node,
+       ? random raw, 0 WATER (Q8), . ground.
+2. [x] MapGenerator.cs - (mapDef | null) + GameSetup + seed -> List<Node>,
+       deterministic per seed (shareable). Random mode: seed + node count
+       decide layout (Q2).
+3. [x] GameSimulator - NewGameWithSpecs(List<Node>, GameSetup); NewGame()
+       stays the quick-restart random wrapper.
+4. [x] GameView - MENU button (top bar) + "BACK TO MENU" while booting +
+       "MAIN MENU" on game over; new games go Menu -> MapGenerator ->
+       NewGameWithSpecs. Ground/water rendered from the shape (Q8); random
+       maps get a ground sheet.
+       [x] Q3/Q4: separate MenuScene (Assets/Scenes/MenuScene.unity) with
+           MenuView = the start screen (both scenes in Build Settings, menu
+           first; game scene redirects to the menu unless the menu started
+           the game - GameFlow).
+       [x] Q5/Q7: all settings editable incl. shape + seed; presets
+           (PlayerPrefs); export/import as a shareable text block.
+       [x] Q9: BOTH previews - text grid + live 3D preview, rebuilt as you
+           edit.
+5. [x] 5 premade maps in Assets/Maps: Classic5x4, Medium10x10, Large15x15,
+       Tall5x10, Finland (28x10, Finland-ish + sea row). MenuScene already
+       references all 5 (MenuView.premadeMaps).
+6. [ ] dev-tasks.txt: mark done + Inspector checklist.
+
+[NOT DONE - master order steps 3+4]
+3. Node data info panel (click node -> generated panel) - next plan file.
+4. Migration from the Nodes panel to in-game interaction.
 
 No changes to `Node.cs` / `Company.cs` / `Market.cs`.
 

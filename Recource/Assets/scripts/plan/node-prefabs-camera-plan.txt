@@ -139,12 +139,30 @@ GameView when present; GameView's hardcoded `SetupCamera()` is retired).
 ---
 
 ## 7. IMPLEMENTATION ORDER (what I will write)
-1. `CameraController.cs` — new file, all pan/zoom/clamp/UI-safe logic.
-2. `GameView.cs` — prefab slots (section 3), `BuildMap()` prefab
-   instantiation, `Refresh()` ownership tint, `SetupCamera()` replaced by
-   CameraController, optional click-select (section 6).
-3. No changes to `GameSimulator.cs` / `Node.cs` — sim stays visual-agnostic.
-4. Update `dev-tasks.txt` with the new Inspector checklist.
+[STATUS 2025: EXECUTED - build clean]
+1. [x] CameraController.cs - DONE (earlier session, Input System based)
+2. [x] GameView.cs - prefab slots (section 3, Inspector: prefabWood/Metal/
+       Energy/Water + prefabChips/MechParts/Building/Food, "Use prefabs"
+       toggle), BuildMap() instantiates the slot prefab (slot = Produced[0] +
+       IsFactory), falls back to NodeShapes placeholders when a slot is empty;
+       Refresh() tints all parts by owner (gray = government, per Q3).
+       SetupCamera() retired - CameraController drives the camera, bounds set
+       from the map extent (nodes + shape).
+       [x] Q1: dual hubs = two shrunk shapes of the two types in a
+           checkerboard (same type on opposite corners), fits one 5-unit cell.
+       [x] Q5: middle-mouse angle drag, left-drag pan, wheel zoom (done earlier).
+       [x] Q9: pan/zoom/angle speeds + limits all in the CameraController
+           Inspector.
+3. [x] No changes to GameSimulator node rules / Node.cs - sim stays visual-agnostic.
+   (GameSimulator only gained NewGameWithSpecs for the map-setup step.)
+4. [ ] Update dev-tasks.txt with the new Inspector checklist.
+
+[NOT DONE - next step, see plan file to be written: "node-ui-plan"]
+6. Node interaction: click a node in 3D -> node-specific panel generated from
+   the node's data (Q4/Q8) - BLOCKED until the map + camera are settled, which
+   they now are. Q10 placeholders (cylinder/ball/cube/triangle + composites)
+   are already in NodeShapes.cs as the temporary look until real prefabs
+   land.
 
 ---
 
@@ -161,6 +179,8 @@ Q1. **Dual-resource raw hubs** (e.g. Wood+Metal, 20% of raw hubs):
     and the organizing should be so that its like a checkerboard patter 
     so same types in opposite corners so top left and bottom right are the same type
     and top right and bottom left are the same type
+
+
 
 Q2. **Ownership visual** — today it's the colored plane under each node.
     With real prefab art, how should "who owns it" read?
