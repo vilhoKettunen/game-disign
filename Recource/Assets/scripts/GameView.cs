@@ -17,6 +17,10 @@ public class GameView : MonoBehaviour
     [SerializeField] GameSimulator sim;
 
     GameSimulator S;
+    [Header("Camera (node-prefabs-camera-plan section 5)")]
+    [Tooltip("Optional: leave empty to auto-find/create one on the main camera.")]
+    CameraController cameraController;
+
     GameObject mapRoot;
     Renderer[] nodeAreaRenderers;
     Renderer[] nodeMarkerRenderers;
@@ -80,6 +84,7 @@ public class GameView : MonoBehaviour
         if (S.Nodes.Count == 0) S.NewGame();
         BuildMap();
         SetupCamera();
+        SetupCameraController();
     }
 
     void OnDestroy()
@@ -205,10 +210,32 @@ public class GameView : MonoBehaviour
             go.tag = "MainCamera";
             cam = go.AddComponent<Camera>();
         }
-        // map is 5 columns x 4 rows, spacing 5 -> center at (10, 0, 7.5)
+        // initial framing only - CameraController (node-prefabs-camera-plan
+        // section 5) drives the camera from here on
         cam.transform.position = new Vector3(10f, 32f, -14f);
         cam.transform.LookAt(new Vector3(10f, 0f, 7.5f));
         cam.nearClipPlane = 0.5f;
+    }
+
+    /// <summary>
+    /// Camera movement (node-prefabs-camera-plan.txt section 5): find or create
+    /// a CameraController and hand it the map extent so pan/zoom stay inside
+    /// the map. The controller auto-creates itself, so nothing needs wiring.
+    /// </summary>
+    void SetupCameraController()
+    {
+        var cc = (cameraController != null) ? cameraController : CameraController.FindOrCreate();
+        if (cc == null) return;
+
+        Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
+        Vector2 max = new Vector2(float.MinValue, float.MinValue);
+        for (int i = 0; i < S.Nodes.Count; i++)
+        {
+            var p = S.Nodes[i].Position;
+            min = new Vector2(Mathf.Min(min.x, p.x), Mathf.Min(min.y, p.y));
+            max = new Vector2(Mathf.Max(max.x, p.x), Mathf.Max(max.y, p.y));
+        }
+        cc.SetMapBounds(min, max);
     }
 
     // ================= UI =================

@@ -1,0 +1,244 @@
+﻿# PLAN — Node Tile Prefabs + Camera Controls
+> Companion to `plan.txt` and `dev-tasks.txt` in this folder.
+> Deliverable: code with Inspector slots you plug your prefabs into, and a
+> top-down camera control system. You make the art, I write the code.
+
+---
+
+## 1. GOAL
+- Replace the primitive markers (cylinder = raw hub, cube = factory) with
+  **real Unity prefabs** you author and drag into the Inspector.
+- Keep map generation working: `GameView.BuildMap()` instantiates the right
+  prefab for each node based on what it produces.
+- Add a **camera control system** (pan + zoom) so the player can move around
+  the map like in top-down map games.
+
+---
+
+## 2. NODE TYPE INVENTORY — the prefabs you will need
+
+A node's identity = `Produced[0]` + `IsFactory`. Minimum set = **8 prefabs**:
+
+| Slot (Inspector order) | Type | Produces | Suggested prefab name |
+|---|---|---|---|
+| raw[0]  | Raw hub | Wood                | `Node_Wood` |
+| raw[1]  | Raw hub | Metal               | `Node_Metal` |
+| raw[2]  | Raw hub | Energy              | `Node_Energy` |
+| raw[3]  | Raw hub | Water               | `Node_Water` |
+| fac[0]  | Factory | Chips               | `Node_Factory_Chips` |
+| fac[1]  | Factory | Mechanical Parts    | `Node_Factory_MechParts` |
+| fac[2]  | Factory | Building Materials  | `Node_Factory_Building` |
+| fac[3]  | Factory | Food                | `Node_Factory_Food` |
+
+Notes:
+- Some raw hubs (20% chance) produce **2 raw resources** (e.g. Wood+Metal).
+  See Q1 for how those should look.
+- Factories always produce exactly 1 refined resource, so the factory slot
+  is unambiguous.
+- Government-owned nodes and player-owned nodes of the same type — see Q2/Q3
+  for how ownership should be shown on top of your prefab art.
+
+---
+
+## 3. INSPECTOR DESIGN (what you plug in)
+
+All slots live on the **GameView** component (the one component you attach),
+so nothing new needs wiring:
+
+```
+GameView
+  Node Prefabs
+    Use prefabs:          [x]   (uncheck = old colored primitives, for fallback)
+    Raw hubs:
+      [ ] Wood             (drag Node_Wood here)
+      [ ] Metal
+      [ ] Energy
+      [ ] Water
+    Factories:
+      [ ] Chips
+      [ ] Mech Parts
+      [ ] Building Mats
+      [ ] Food
+  Camera
+    Pan speed:            20
+    Zoom min:             10
+    Zoom max:             60
+    Edge scroll:          [x]
+    WASD pan:             [x]
+    Right-mouse drag:     [x]
+    Mouse wheel zoom:     [x]
+```
+
+Rules:
+- Slot empty (null) -> falls back to today's primitive marker for that type.
+- `Use prefabs` off -> exactly the current look (safety net).
+- You can mix: plug in 3 factories and leave the rest empty; only the
+  plugged types change.
+
+---
+
+## 4. MAP GENERATION FLOW (code side, no GameSimulator changes)
+
+`GameView.BuildMap()` per node, after `S.NewGame()`:
+1. Ownership plane (the flat colored "territory" disc) — kept as-is,
+   colored by `GameSimulator.ColorOf(node)`. (See Q2 if you want it gone.)
+2. **Prefab**: instantiate
+   `IsFactory ? factoryPrefabs[(int)Produced[0] - 4] : rawNodePrefabs[(int)Produced[0]]`
+   at the node's grid position, parented under `NodeMap`, collider removed.
+3. Label: floating name above the node (TextMesh, as today) — see Q8.
+4. Ownership changes (you buy a node / buyout) -> existing `Refresh()`
+   updates colors; if you choose "owner tint" (Q2) we tint the prefab's
+   shared material too.
+5. RESTART (`NewGame`) -> map is fully rebuilt, so new random node types
+   automatically pick up their prefabs.
+
+Authoring notes for your prefabs (so they slot in cleanly):
+- **Pivot at the base** (bottom-center of the model) — the code places it
+  at grid position with no extra offset.
+- Roughly similar footprint (they sit on a 5-unit grid spacing); a model
+  ~2-3 units wide reads well at the default camera.
+- No colliders / scripts on the prefab; flat shading or lit both fine.
+- If a prefab is a hierarchy, that's fine — we instantiate the root.
+
+---
+
+## 5. CAMERA CONTROL SYSTEM
+
+New file: **`CameraController.cs`** (standalone MonoBehaviour, auto-used by
+GameView when present; GameView's hardcoded `SetupCamera()` is retired).
+
+### Inputs (defaults, all toggleable in Inspector)
+| Action | Input | Notes |
+|---|---|---|
+| Pan | **WASD / arrow keys** | speed = `PanSpeed` units/s |
+| Pan | **Right-mouse drag** (or middle) | 1:1 drag feel |
+| Pan | **Screen edge scroll** | optional toggle |
+| Zoom | **Mouse wheel** | clamped to ZoomMin/ZoomMax, zooms toward cursor |
+| (Q4) | **Left click on node** | select node — see section 6 |
+
+### Behavior
+- Works with perspective or orthographic camera (see Q5).
+- Camera pitch fixed (set once on Start: current ~angled top-down look, or
+  straight down if you prefer — Q5).
+- **Bounds clamp**: pan/zoom is clamped so the camera can't leave the map
+  (map extent computed from node positions + margin).
+- **UI-safe**: panning/zooming is disabled while the mouse is over an IMGUI
+  panel, so dragging in a list never moves the camera.
+- Inspector-tunable: pan speed, zoom min/max, edge scroll speed — no code
+  edits needed to feel it in.
+
+---
+
+## 6. NODE INTERACTION (optional, pending Q4)
+- Left-click raycasts from camera to map plane -> hits a node -> that node is
+  "selected": outline/scale pulse on it, and the Nodes panel row is
+  highlighted.
+- Hover: subtle highlight so you know you can click.
+- This makes prefabs *interactive*, not just decorative.
+
+---
+
+## 7. IMPLEMENTATION ORDER (what I will write)
+1. `CameraController.cs` — new file, all pan/zoom/clamp/UI-safe logic.
+2. `GameView.cs` — prefab slots (section 3), `BuildMap()` prefab
+   instantiation, `Refresh()` ownership tint, `SetupCamera()` replaced by
+   CameraController, optional click-select (section 6).
+3. No changes to `GameSimulator.cs` / `Node.cs` — sim stays visual-agnostic.
+4. Update `dev-tasks.txt` with the new Inspector checklist.
+
+---
+
+## 8. QUESTIONS — PLEASE ANSWER BEFORE I WRITE THE CODE
+(Answer here or in chat; anything you skip I use the default in brackets.)
+
+Q1. **Dual-resource raw hubs** (e.g. Wood+Metal, 20% of raw hubs):
+    [default: use the first produced resource's prefab (Wood+Metal -> Node_Wood)]
+    or do you want a 6th "combo" prefab / 6 pair-specific prefabs?
+
+    the combinations are made by taking 2 of both types prefabs and shrinking them 
+    and organizing them so that they fit in the same footprint as one fully sized prefab
+
+    and the organizing should be so that its like a checkerboard patter 
+    so same types in opposite corners so top left and bottom right are the same type
+    and top right and bottom left are the same type
+
+Q2. **Ownership visual** — today it's the colored plane under each node.
+    With real prefab art, how should "who owns it" read?
+    [default: keep the colored plane as territory, prefab stays your art]
+    or: tint the prefab itself by owner color? or: add a small owner-flag
+    child prefab you'd also author (e.g. Flag_You / Flag_AI / Flag_Gov)?
+
+    actually just use the UI thats in the node prefab (we will have UI there 
+    that shows the name / type and production of the node and later add it so
+    that wen you click on the node you can do interactions like upgrades sales 
+    or purchuses of the node as a separate custum UI that gets generated based on that nodes data) 
+    you will make me a separate plan file for this upcuming migration of UI from the current
+    nodes panel to a more interactive UI that is generated based on the node data and will be displayed
+    when you click on a node in the 3D map but before we can execute that plan we need to first finnish the map
+    and camera controls so that we can click on a node and have it display the new UI that will be generated based on the node data
+
+Q3. **Government nodes**: separate prefab (e.g. `Node_Government`) or just
+    gray-territory like today?
+    [default: gray territory plane + normal type prefab]
+
+    goverment nodes are still the same type like wood or metal or energy or water but they are owned by the
+    goverment so they will have the goverment flag on them and will be gray in color to show that they are 
+    owned by the goverment
+
+    so theres no specific "goverment node" just the color of the node beeing gray to show that its not 
+    owned by the player  or other AI
+
+Q4. **Click a node in 3D** to select it / jump to its panel row?
+    [default: YES, plus hover highlight]
+
+    it will generate a new panel that will show that nodes data and interactions with it 
+    like upgrades or sales or purchases of the node and will be generated based on the nodes data
+    and wen pressing outside that panel it will close the panel and return to the 3D map view
+    or we pressing a close button on the panel will also close the panel and return to the 3D map view
+
+Q5. **Camera style**: keep the current angled perspective (looks 3D, current
+    feel), or switch to a pure straight-down **orthographic** top-down
+    (classic map-game look)?
+    [default: keep angled perspective]
+
+    let theplayer ajust the camera angle in game by holding scroll wheel down and moving the mouse up and down to adjust the angle of the camera
+    and wen a player holds left click and drags the mouse around the map it will pan the camera around the map and wen they scroll the mouse wheel it will zoom in and out of the map
+
+Q6. **Pan input mix**: WASD + right-drag + edge scroll all on, or only some?
+    [default: all three, each toggleable in Inspector]
+
+    all of the above
+
+Q7. **Map layout**: keep the neat 5x4 grid, or scatter nodes more randomly
+    (bigger map, makes camera controls matter more)?
+    [default: keep grid for now]
+
+    i will make a custum map sceanes so they will have a shape and and based on that shape the game will
+    generate the tiles later we will make a start / setup screen were players can choose maps and edit settings like 
+    the size of the map and the number of nodes and the types of nodes that will be generated on the map and 
+    then it will generate a custum map based on those settings and then the player can play on that custum map
+    or on one of the premade maps 
+
+Q8. **Floating name labels** above each node (e.g. "3 M+F"): keep, drop, or
+    show only on hover?
+    [default: keep]
+
+    yes each node has UI thats above them that shows 
+    type
+    production 
+    owner (color)
+
+    and wen clicking it generates and opens the node specific UI that shows 
+    the nodes data and interactions with it like upgrades or sales or purchases of the node and will be generated based on the nodes data
+
+Q9. **Zoom limits** defaults 10..60 and **pan speed** 20 — ok, or do you
+    want tighter/wider?
+    [default as listed]
+
+    use the defoult but allow me to edit them in the inspector so i can adjust them to my liking
+
+Q10. **RESTART behavior**: rebuilding the map destroys + re-instantiates all
+     prefabs (so new random types show). Fine?
+     [default: yes]
+
+     yes

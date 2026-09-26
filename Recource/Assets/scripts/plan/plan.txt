@@ -87,6 +87,19 @@ progress — check off finished tasks and add new ones.
     [ ] Optional: player-vs-AI buyout offers, more module types
     [ ] Final pass: GDD cleanup + link the code into each plan doc
 
+  Phase 5 — Map & In-Game Interaction (CURRENT MASTER ORDER)
+    Plan: Assets/scripts/plan/node-prefabs-camera-plan.txt
+          + Assets/scripts/plan/map-setup-plan.txt
+    [x] 1. Camera movement (CameraController.cs: WASD / left+right drag /
+         edge scroll / wheel zoom / hold-wheel angle / R reset / bounds)
+    [ ] 2. Map creator / editor / game setup (map-setup-plan.txt —
+         answer its 10 questions, then MapDefinition + MapGenerator +
+         setup screen)
+    [ ] 3. Node data info panel (generated from node data, shown above/on
+         the node — node-prefabs-camera-plan Q2/Q8)
+    [ ] 4. Migrate UI node interaction to in-game (click node -> its own
+         panel: upgrades / sell / buy; close on outside-click or X)
+
 6. CODE MAP (what exists now)
 ----------------------------------------------------------------
   materials.cs    ResourceType/ModuleType enums + MaterialCatalog

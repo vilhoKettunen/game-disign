@@ -1,0 +1,217 @@
+﻿# PLAN — Map Creator / Editor / Game Setup Process
+> Step 2 of the master order (node-prefabs-camera-plan.txt section 7 / Q7 answer):
+> 1. [x] camera movement (CameraController.cs - DONE)
+> 2. [ ] **map creator / editor / game setup process (THIS FILE)**
+> 3. [ ] node data info panel generation
+> 4. [ ] migration from UI node interaction to in-game interaction
+
+---
+
+## 1. GOAL (your Q7 answer, verbatim)
+> "i will make a custom map scene so they will have a shape and based on that
+> shape the game will generate the tiles. Later we will make a start / setup
+> screen where players can choose maps and edit settings like the size of the
+> map and the number of nodes and the types of nodes that will be generated
+> on the map, and then it will generate a custom map based on those settings
+> and then the player can play on that custom map or on one of the premade maps"
+
+So the deliverables are:
+1. A **map shape format** - you author maps (scene-based and/or premade assets).
+2. A **MapGenerator** - turns "shape + settings" into the node list
+   (positions + types) that `GameSimulator.NewGame()` currently hard-codes.
+3. A **start / setup screen** - pick a map, edit settings, start the game.
+
+---
+
+## 2. CURRENT STATE (what changes)
+- `GameSimulator.NewGame()` (GameSimulator.cs ~line 110-160) is the ONLY place
+  nodes are created: it loops `config.TotalNodes`, randomly picks raw/factory
+  types, and places them on a fixed 5-column grid:
+  `n.Position = new Vector2((i % 5) * 5f, (i / 5) * 5f);`
+- `GameConfig` holds `TotalNodes`, `CompanyCount`, ... but nothing about shape.
+- `GameView.BuildMap()` reads `S.Nodes[].Position` - it does not care HOW the
+  nodes were created. So the map system can live entirely around NewGame()
+  without touching rendering.
+
+**The clean cut:** MapGenerator produces `List<MapNodeSpec>` (position +
+optional type) and `NewGame(specs, settings)` uses them instead of its own
+loop. Everything else (companies, ownership, production) stays as-is.
+
+---
+
+## 3. MAP SHAPE FORMAT - WHERE DO MAPS COME FROM?
+
+Option A — **ScriptableObject grid (recommended default)**
+A `MapDefinition` asset: rows of characters, e.g.
+```
+"........"
+"..WWW..."
+".M....E."
+"....FF.."
+"X......."
+```
+Legend: `.` empty, `W/M/E/W2` = raw type, `F` = factory (type randomized),
+`?` = random raw, `X` = blocked/decoration, `N` = any node.
+- Pros: premade maps are just assets, easy to diff/version, easy to
+  serialize custom maps, setup screen lists them automatically.
+- Cons: you type the shape instead of building it in a scene.
+
+Option B — **Scene-based slots**
+You place "MapSlot" prefabs in a scene to draw the shape; the generator reads
+their positions at runtime.
+- Pros: matches your "I will make a custom map scene" statement; WYSIWYG.
+- Cons: a map = a scene; saving/loading custom maps is harder; harder to
+  offer "choose from premade maps" in one build.
+
+Option C — **Both (scene = live custom maps, SO = premade library)**
+Editor-only helper that exports the scene layout into a `MapDefinition` asset.
+Most flexible, most work.
+
+[default: A now, structure it so C can be added later]
+
+---
+
+## 4. SETTINGS EDITABLE ON THE SETUP SCREEN
+[default: all of the following, each with the current GameConfig value as default]
+
+| Setting | Current | Notes |
+|---|---|---|
+| Map (shape) | n/a | list of `MapDefinition` assets + "Random" |
+| Seed | none | same seed = same node types (needed for shared custom maps) |
+| Node count cap | 20 | if the shape has more slots than this, keep the first N |
+| Node type mix | random today | % raw Wood/Metal/Energy/Water, % factory, % dual-resource hub |
+| Dual-resource hub chance | 20% | (resource-hub-plan Q5) |
+| Company count | 4 | AI companies at start |
+| Starting PP | 400 | per company |
+| Tax every N ticks / rate | 5 / 30% | from GameConfig |
+| Tick speed | 60s | from GameConfig |
+
+---
+
+## 5. START / SETUP SCREEN FLOW
+[default: in-scene IMGUI overlay, like the existing INFO overlay - no new scene]
+
+1. Scene starts -> game does NOT auto-start.
+2. Setup screen shows:
+   - MAP:  [Premade1] [Premade2] [Random]   (or a preview of the shape)
+   - SETTINGS: seed, node count, mix, companies, tax... (sliders/fields)
+   - [START GAME]   [CANCEL / back to menu]
+3. START -> `MapGenerator.Generate(mapDef, settings, seed)` ->
+   `S.NewGameWithSpecs(specs, cfg)` -> existing game UI appears.
+4. In-game: a "MAIN MENU" / "NEW GAME" button returns to the setup screen
+   (current RESTART button becomes "quick restart with same settings").
+
+Question: should the setup screen appear EVERY time, or only the first time
+with a "NEW GAME" button to re-open it? [default: both - auto-show at start +
+"NEW GAME" button in the top bar]
+
+---
+
+## 6. IMPLEMENTATION ORDER (what I will write, in order)
+1. `MapDefinition.cs` - ScriptableObject shape grid + legend + helpers
+   (slot count, validation, preview text).
+2. `MapGenerator.cs` - `(mapDef | null) + settings + seed -> List<Node>`
+   (positions from shape, types from mix/seed). Reuses MaterialCatalog.
+3. `GameSimulator` - `NewGameWithSpecs(List<Node> nodes, GameConfig cfg)`;
+   `NewGame()` becomes a thin wrapper (random 5-col grid, as today) so
+   nothing breaks.
+4. `GameView` - setup screen (IMGUI), NEW GAME button, pass-through to
+   simulator. Existing RESTART keeps working.
+5. 2-3 premade `MapDefinition` assets (e.g. "Classic 5x4", "River bend",
+   "Islands") so the setup screen has something to pick.
+6. `dev-tasks.txt` / this file: mark done, add Inspector checklist.
+
+No changes to `Node.cs` / `Company.cs` / `Market.cs`.
+
+---
+
+## 7. QUESTIONS - ANSWER BEFORE I WRITE THE CODE
+(skip a question = I use the default in brackets)
+
+Q1. Map source format: A (ScriptableObject grids) / B (scene slots) / C (both)?
+    [default A, built so C can be added later]
+
+    start with scriptableobject grids
+
+Q2. Should node TYPES be fixed by the map (W=Wood always), random per
+    generation (seeded), or a mix (map says "a node goes here", type is rolled)?
+    [default: map can pin types OR say "any" - both supported in one format]
+
+    allow the user to generate fully random with setting node and company count, or allow the user to select a premade map with fixed node types
+
+Q3. Setup screen: in-scene overlay, or a separate menu scene?
+    [default: in-scene IMGUI overlay, matches existing UI style]
+
+    separate menu scene that should be the start screen when first starting the game, and then the user can access it from the main menu
+    so that the user can choose what kind of a game they want to play, and then the game will generate a map based on those settings
+
+Q4. Show setup screen every start + NEW GAME button, or only first start?
+    [default: both]
+
+    every time the game is started we should load into the setup screen and there should be a "back to menu" 
+    button that allows the player to go back to setup
+
+Q5. Which settings must be editable? (list from section 4)
+    [default: all]
+
+   all setings should be editable or att least as many as possible, including the map shape, seed,
+   node count cap, node type mix, dual-resource hub chance, company count, starting PP, tax every N ticks
+   / rate, and tick speed
+
+   and the player should be able to save presets and it should save thous as player made custum templates so they
+   can reuse and shere then to others so there should be an import and export tool as a simple json file that can
+   be shared with others
+
+Q6. Premade maps: how many, and what shapes?
+    [default: 3 - Classic 5x4 (today's layout), River bend, Islands;
+     I sketch them in the plan, you veto/edit before I make the assets]
+
+     make 5 premade maps
+
+     1. Classic 5x4 (today's layout)
+     2. medium sized 10x10 map
+     3. large sized 15x15 map
+     4. a more tall map 5x10 map
+     5. a finland shaped map that you can make max 30x10 make it as finland shaped as possible with the map slots
+
+Q7. Seed: visible + editable on the setup screen (so custom maps can be
+    shared as "map + seed")?  [default: yes, a text field]
+
+    yes a text field that is editable and visible on the setup screen so that the player can share their custom maps with others
+
+    and for the maps should have a prewiew in the setup so that the player can see what the map would look like
+    before they start the game so they know what to expect
+
+Q8. Should an empty map slot (".") still render the ground/terrain, or be
+    nothing at all? (affects how the "shape" reads visually)
+    [default: nothing - just empty space; terrain art comes with the
+     prefab work (Q1/Q8 answers in node-prefabs-camera-plan)]
+
+     render ground/terrain for empty map slots so that the player can see what the map would look like and it would be easier to read visually
+     but also add "0" as empty water so we can make lakes and ochiens and rivers and stuff like that so that the player can make more interesting maps
+
+Q9. Map preview on the setup screen: text-grid preview (cheap) or a 3D
+    camera flyover of the shape (nicer, more work)?
+    [default: text-grid preview now, 3D preview later with the prefabs]
+
+    both i want to show both and let the player edit as they go with settings and directly see the changes in the 3D 
+    preview so that they can see what the map would look like and how it would play out
+
+Q10. After this step, do nodes still get their primitive markers (cylinder/
+     cube) until the prefab slots are filled?  [default: yes - visual system
+      is unchanged; this step is purely "where + what kinds of nodes"]
+
+      for temperary use
+      cylinder for wood
+      ball for metal
+      cube for energy
+      triangle for water
+
+      two cubes (ontop of each other) for dual resource hubs
+
+      two balls (ontop of each other) for chips
+      a cylinder with a cube on top for mecanical parts
+      a triangle with a ball on top for food
+      a cube with ball on top for building materials
+
+      thease are the placeholders as long as theres no real prefab refrenced so we still can test it before making the prefabs
