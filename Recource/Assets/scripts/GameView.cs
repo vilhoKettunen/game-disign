@@ -50,6 +50,17 @@ public class GameView : MonoBehaviour
         }
     }
 
+    GUIStyle _small;
+    GUIStyle Small
+    {
+        get
+        {
+            if (_small == null)
+                _small = new GUIStyle(GUI.skin.label) { fontSize = 11 };
+            return _small;
+        }
+    }
+
     void Awake()
     {
         S = sim;
@@ -207,6 +218,7 @@ public class GameView : MonoBehaviour
         }
 
         // ---- top bar ----
+        LoadToggles();
         GUILayout.BeginHorizontal("box");
         GUILayout.Label("Tick " + S.TickCount, GUILayout.Width(70));
         GUILayout.Label("Tax in " + S.TicksUntilTax, GUILayout.Width(70));
@@ -216,22 +228,36 @@ public class GameView : MonoBehaviour
         if (GUILayout.Button("TICK", GUILayout.Width(55))) S.ForceTick();
         if (GUILayout.Button("TAX NOW", GUILayout.Width(80))) S.ForceTax();
         if (GUILayout.Button("RESTART", GUILayout.Width(80))) S.NewGame();
+        GUILayout.Space(12);
+
+        // panel toggles (choice is remembered between games)
+        bool prevC = showCompany, prevP = showPrices, prevN = showNodes;
+        showCompany = GUILayout.Toggle(showCompany, "Company", GUILayout.Width(84));
+        showPrices  = GUILayout.Toggle(showPrices,  "Prices",  GUILayout.Width(70));
+        showNodes   = GUILayout.Toggle(showNodes,   "Nodes",   GUILayout.Width(70));
+        if (showCompany != prevC || showPrices != prevP || showNodes != prevN) SaveToggles();
+        if (GUILayout.Button(showInfo ? "INFO ✕" : "INFO ?", GUILayout.Width(75)))
+            showInfo = !showInfo;
         GUILayout.EndHorizontal();
 
         if (statusMsg != "")
             GUILayout.Label(statusMsg, GUILayout.Width(1000));
 
-        // ---- main panels ----
-        GUILayout.BeginHorizontal();
-        CompanyPanel();
-        MarketPanel();
-        NodePanel();
-        GUILayout.EndHorizontal();
+        // ---- main panels (only the visible ones) ----
+        if (showCompany || showPrices || showNodes)
+        {
+            GUILayout.BeginHorizontal();
+            if (showCompany) CompanyPanel();
+            if (showPrices)  MarketPanel();
+            if (showNodes)   NodePanel();
+            GUILayout.EndHorizontal();
+        }
 
         // ---- log ----
         LogPanel();
 
         if (S.GameOver) GameOverPanel();
+        else if (showInfo) InfoOverlay();
     }
 
     void CompanyPanel()
@@ -264,7 +290,7 @@ public class GameView : MonoBehaviour
             var r = p.PaymentPriority[idx];
             GUILayout.BeginHorizontal();
             GUILayout.Label((idx + 1) + ". " + MaterialCatalog.Name(r), GUILayout.Width(200));
-            if (GUILayout.Button("<", "minibutton", GUILayout.Width(28)))
+            if (GUILayout.Button("▲", "minibutton", GUILayout.Width(28)))
             {
                 if (idx > 0)
                 {
@@ -273,7 +299,7 @@ public class GameView : MonoBehaviour
                     p.PaymentPriority[idx] = tmp;
                 }
             }
-            if (GUILayout.Button(">", "minibutton", GUILayout.Width(28)))
+            if (GUILayout.Button("▼", "minibutton", GUILayout.Width(28)))
             {
                 if (idx < p.PaymentPriority.Count - 1)
                 {
@@ -301,12 +327,13 @@ public class GameView : MonoBehaviour
     {
         GUILayout.BeginVertical("box", GUILayout.Width(280));
         GUILayout.Label("GOVERNMENT PRICES (PP/unit)", Bold);
+        GUILayout.Label("red = cheap, green = expensive", Small);
         GUILayout.Label("Special this cycle: " + MaterialCatalog.Name(S.market.SpecialResource) + " (2x)");
         for (int i = 0; i < MaterialCatalog.ResourceCount; i++)
         {
             var r = (ResourceType)i;
             string star = (r == S.market.SpecialResource) ? "  *" : "";
-            GUILayout.Label("  " + MaterialCatalog.Name(r) + ": " + S.market.Price(r).ToString("0") + star);
+            GUILayout.Label("  " + MaterialCatalog.Name(r) + ": " + S.market.Price(r).ToString("0") + star, HeatPriceStyle(i));
         }
 
         GUILayout.Space(6);
@@ -526,5 +553,111 @@ public class GameView : MonoBehaviour
         }
         GUILayout.EndHorizontal();
         return current;
+    }
+
+    // ================= PANEL TOGGLES (persisted across restarts) =================
+
+    static readonly string KeyCompany = "showCompany";
+    static readonly string KeyPrices  = "showPrices";
+    static readonly string KeyNodes   = "showNodes";
+
+    bool showCompany = true;
+    bool showPrices  = true;
+    bool showNodes   = true;
+    bool showInfo    = false;
+
+    void LoadToggles()
+    {
+        if (PlayerPrefs.HasKey(KeyCompany)) showCompany = PlayerPrefs.GetInt(KeyCompany, 1) == 1;
+        if (PlayerPrefs.HasKey(KeyPrices))  showPrices  = PlayerPrefs.GetInt(KeyPrices,  1) == 1;
+        if (PlayerPrefs.HasKey(KeyNodes))   showNodes   = PlayerPrefs.GetInt(KeyNodes,   1) == 1;
+    }
+
+    void SaveToggles()
+    {
+        PlayerPrefs.SetInt(KeyCompany, showCompany ? 1 : 0);
+        PlayerPrefs.SetInt(KeyPrices,  showPrices  ? 1 : 0);
+        PlayerPrefs.SetInt(KeyNodes,   showNodes   ? 1 : 0);
+        PlayerPrefs.Save();
+    }
+
+    // ================= PRICE HEAT COLORS =================
+
+    /// <summary>t: 0 = cheapest price this cycle, 1 = most expensive. Red = cheap, green = expensive, white = middle.</summary>
+    Color HeatColor(float t)
+    {
+        t = Mathf.Clamp01(t);
+        if (t <= 0.5f)
+        {
+            float r = 1f - t * 2f; // 1 at cheapest -> 0 at middle
+            return Color.Lerp(Color.white, new Color(1f, 0.3f, 0.3f), r);
+        }
+        float g = (t - 0.5f) * 2f; // 0 at middle -> 1 at most expensive
+        return Color.Lerp(Color.white, new Color(0.3f, 1f, 0.35f), g);
+    }
+
+    GUIStyle _priceStyle;
+
+    /// <summary>Label style with the heat color for resource <paramref name="res"/> (red=cheap, green=expensive).</summary>
+    GUIStyle HeatPriceStyle(int res)
+    {
+        if (_priceStyle == null) _priceStyle = new GUIStyle(GUI.skin.label);
+        _priceStyle.normal.textColor = HeatColor(PriceHeat((ResourceType)res));
+        return _priceStyle;
+    }
+
+    /// <summary>Normalised position of a resource's price this cycle: 0 = cheapest, 1 = most expensive.</summary>
+    float PriceHeat(ResourceType res)
+    {
+        float minP = float.MaxValue, maxP = float.MinValue;
+        for (int i = 0; i < MaterialCatalog.ResourceCount; i++)
+        {
+            float pr = S.market.Price((ResourceType)i);
+            if (pr < minP) minP = pr;
+            if (pr > maxP) maxP = pr;
+        }
+        float p = S.market.Price(res);
+        if (maxP - minP < 0.0001f) return 0.5f;
+        return Mathf.Clamp01((p - minP) / (maxP - minP));
+    }
+
+    // ================= INFO / TUTORIAL OVERLAY =================
+
+    void InfoOverlay()
+    {
+        GUI.color = new Color(0f, 0f, 0f, 0.7f);
+        GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
+        GUI.color = Color.white;
+
+        float w = Mathf.Min(780f, Screen.width - 40f);
+        float h = Mathf.Min(470f, Screen.height - 60f);
+        GUILayout.BeginArea(new Rect((Screen.width - w) / 2f, (Screen.height - h) / 2f, w, h), "box");
+
+        var head = new GUIStyle(GUI.skin.label) { fontSize = 18, fontStyle = FontStyle.Bold };
+        GUILayout.Label("HOW TO PLAY", head);
+        GUILayout.Space(6);
+
+        GUILayout.Label("Goal: own every node and make every other company disappear.", Bold);
+        GUILayout.Label("1. Each TICK your nodes produce resources into your inventory (the map shows who owns what).");
+        GUILayout.Label("2. Taxes are due every few ticks (see 'Tax in' in the top bar). The quota is based on the");
+        GUILayout.Label("   value of what you produced. You pay with resources in your priority order -");
+        GUILayout.Label("   use the [Company] panel arrows to move resources up/down in that order.");
+        GUILayout.Label("3. EXTRA TAX (slider in [Company]) = pay a bit more now for bonus Political Power (PP).");
+        GUILayout.Label("4. Spend PP on government nodes, or offer resources worth MORE than a node or a company");
+        GUILayout.Label("   is worth to buy it from its owner (see [Nodes]).");
+        GUILayout.Label("5. Market prices (PP per unit) change every tax cycle. Price colors:");
+        GUILayout.Label("   red = cheap this cycle, green = expensive, white = average.");
+        GUILayout.Label("6. Fail a tax " + S.config.BankruptAtFails + " times in a row and you go bust.");
+        GUILayout.Space(6);
+        GUILayout.Label("The top-bar checkboxes hide/show panels - your choice is remembered between games.", Small);
+
+        GUILayout.FlexibleSpace();
+        GUILayout.BeginHorizontal();
+        GUILayout.FlexibleSpace();
+        if (GUILayout.Button("CLOSE", GUILayout.Width(140)))
+            showInfo = false;
+        GUILayout.FlexibleSpace();
+        GUILayout.EndHorizontal();
+        GUILayout.EndArea();
     }
 }
