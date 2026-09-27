@@ -1,0 +1,210 @@
+﻿# UI/UX POLISH PLAN — "Recource"
+> The game works end-to-end but is bare-bones: no visual feedback, no
+> instructions, no control over which panels are visible.
+> This plan adds the missing **visuals** (price heat-colors, proper arrows)
+> and **instructions** (tutorial) + **usability** (panel toggles).
+>
+> Companion to `plan.txt` (master), `dev-tasks.md`, and the four system plan
+> docs. Follow the design-first rule: the specs below ARE the design —
+> implement them as written, then check the boxes off.
+
+## 0. Scope & rules
+- All UI changes live in `GameView.cs`. Game logic in `GameSimulator.cs`
+  stays untouched.
+- Optional small helpers may be added to `Market.cs` / `materials.cs`
+  (price range, recipe text) — see §1.2 and §3.2.
+- Stay in IMGUI (no new packages, no UI Toolkit).
+- Everything must still work after `RESTART` / `NewGame()`.
+
+**Files touched**
+| File | What changes |
+|---|---|
+| `GameView.cs` | price heat-colors, up/down arrows, Info panel + its top-bar button, panel toggle buttons |
+| `Market.cs` *(optional)* | `MinPrice(r)`, `MaxPrice(r)`, `Normalize(r)` helpers |
+| `materials.cs` *(optional)* | `RecipeText(output)` helper so the tutorial always matches the code |
+
+---
+
+## 1. FEATURE A — Price heat-colors (Government Prices panel) — ✅ DONE
+
+### 1.1 Goal
+Make each resource's current price readable **at a glance** — cheap or
+expensive relative to its own normal range:
+- **Green** = expensive (good time to *sell / trade for*; bad to buy).
+- **Red** = cheap (good time to *buy*; bad to sell).
+- **Neutral (no tint)** = exactly in the middle of the range.
+- **Strength** of the tint = how far the price is from the middle
+  (closer to an extreme = more opaque/saturated).
+
+### 1.2 The math (design decision — implement exactly this)
+Each cycle a price is `base * demand(0.75–1.5) * fluct * special(1 or 2)`.
+Use the **normal range** (ignore the 2x special) as the normalization base:
+
+```
+fluct    = MaterialCatalog.Fluctuation(r)          // 0.2 raw, 0.5 refined
+minPrice = BasePrice(r) * 0.75 * (1 - fluct)
+maxPrice = BasePrice(r) * 1.5  * (1 + fluct)
+t        = clamp((price - minPrice) / (maxPrice - minPrice), 0, 1)
+
+redAlpha   = clamp((0.5 - t) * 2, 0, 1)   // 1 at t=0 (cheapest), 0 at t=0.5
+greenAlpha = clamp((t - 0.5) * 2, 0, 1)   // 0 at t=0.5, 1 at t=1 (dearest)
+```
+
+Reference bounds (normal, no special):
+- raw:     min = 0.60·base,  max = 1.80·base
+- refined: min = 0.375·base, max = 2.25·base
+
+At `t = 0.5` both alphas are `0` → **transparent, identical to the rest**
+(matches the requirement). A "special" resource (2x) clamps to `t = 1`
+→ full green (it really is very high — that's correct and informative).
+
+### 1.3 Rendering (IMGUI) — two overlaid panels per row
+As requested: draw a semi-transparent **red** box and a semi-transparent
+**green** box behind each price row, using the alphas from §1.2.
+Simplest reliable technique:
+1. Compute the row `Rect`.
+2. `GUI.color = new Color(1,0,0,redAlpha)` → `GUI.DrawTexture(rect, whiteTex)`.
+3. `GUI.color = new Color(0,1,0,greenAlpha)` → `GUI.DrawTexture(rect, whiteTex)`.
+4. Reset `GUI.color = Color.white`, then draw the label (white text on top).
+
+(Or a `GUIStyle` with a white background texture modulated by `GUI.color` —
+either is fine, keep it to one approach.)
+
+### 1.4 Tasks
+- [x] Add `MinPrice / MaxPrice / Normalize` (on `Market` or `GameView`).
+- [x] Refactor `MarketPanel()` price rows to draw the red+green background.
+- [x] Add a one-line legend in the panel: "green = expensive, red = cheap".
+- [x] Verify: neutral at middle, full green at max, full red at min, special = green.
+- [x] **Q1 add-on:** also draw a small **position slider** under each price —
+      track + colored fill (width = `t`) + a white marker line — so the exact
+      price position is visible even at the middle. Same red/green coloring.
+
+---
+
+## 2. FEATURE B — Tax priority arrows (up / down) — ✅ DONE
+
+### 2.1 Goal
+The `<` / `>` buttons currently point left/right. Change them to **up/down
+arrows** so the glyph matches the action:
+- **Up arrow (▲)** = move this resource **up** the list → used **earlier** to pay tax.
+- **Down arrow (▼)** = move it **down** the list → used **later** (preserved).
+
+The swap logic already does this (`<` swaps with `idx-1`, `>` with `idx+1`) —
+only the **labels/visuals** change, not the behavior.
+
+### 2.2 Tasks
+- [x] Replace `Button("<")` with an up arrow (▲), keep the `idx-1` swap.
+- [x] Replace `Button(">")` with a down arrow (▼), keep the `idx+1` swap.
+- [x] Add a hint label: "▲ pay with this first · ▼ keep it last".
+- [x] Verify edges: top item's ▲ no-ops, bottom item's ▼ no-ops.
+
+---
+
+## 3. FEATURE C — Tutorial / Info screen — ✅ DONE
+
+### 3.1 Goal
+A toggleable info panel (top-bar button, e.g. **[?] INFO**) that explains the
+game, **all recipes**, and **all upgrade costs**.
+
+### 3.2 Content (full spec)
+**Goal & loop**
+- **Win:** own all 20 nodes AND every other company gone.
+- **Lose:** fail your tax quota twice in a row → the government seizes your company.
+- Each tick your nodes produce; every 5th tick is a **tax tick** (prices re-roll);
+  spend earned PP on nodes / modules / trades.
+
+**Resources**
+- Raw (from hubs): Wood, Metal, Energy, Water
+- Refined (from factories): Chips, Mechanical Parts, Building Materials, Food
+
+**Refining / conversion rates** (inputs per 1 unit of refined output)
+| Output | Inputs |
+|---|---|
+| Chips | 2 Metal + 1 Energy |
+| Mechanical Parts | 2 Metal + 1 Water |
+| Building Materials | 1 Wood + 1 Energy + 1 Water |
+| Food | 1 Energy + 1 Water |
+
+**Node modules** (max 5 slots per node; each module **doubles** that node's stat)
+| Module | Effect | Cost |
+|---|---|---|
+| ProductionBooster (Speed 2x) | 2x production | 10 Chips + 10 Mechanical Parts |
+| StorageBooster (Store 2x) | 2x storage | 10 Building Materials + 10 Food |
+
+**Taxes**
+- Quota = 30% of your produced value this cycle (+ any extra % you set).
+- Paid in resources in your **priority order** (top of list used first).
+- Paid fully → earn PP (the extra portion is worth 1.5x). Failed → next bill +20%;
+  2 fails = bankrupt.
+
+**Trading**
+- A company accepts a trade only if you offer **more** PP value than you request.
+
+**Price colors** (see §1)
+- green = expensive (sell now) · red = cheap (buy now) · neutral = middle.
+
+**Political Power (PP)**
+- Earned from taxes; spent to buy government (gray) nodes.
+- The more nodes you already own, the more the next one costs.
+
+### 3.3 Tasks
+- [x] Add `bool showInfo` + a **[?] INFO** toggle button in the top bar.
+- [x] Build the Info screen with the sections above (scrollable).
+- [x] Pull recipe/cost text from `MaterialCatalog` (`ModuleRecipeText`, new
+      `RecipeText(output)`) so it always matches the code.
+- [x] **Q3:** rendered as a **full-screen overlay** (dimmed background), but the
+      top bar stays visible so it can be toggled off with `[x] INFO` / `CLOSE`.
+- [x] Verify it toggles on/off and survives `NewGame()` (state is saved).
+
+---
+
+## 4. FEATURE D — Panel toggles (top bar) — ✅ DONE
+
+### 4.1 Goal
+The three big panels (**Your Company**, **Government Prices**, **Nodes**) can
+be shown/hidden from buttons in the top bar.
+
+### 4.2 Spec
+- Four toggle buttons in the top bar, `[x]`/`[ ]` prefix shows state:
+  `[x] Company` `[x] Prices` `[x] Nodes` `[ ] INFO`.
+- Company / Prices / Nodes are **ON by default**; INFO is OFF by default.
+- The trade form + node buying live **inside Nodes**, so hiding Nodes hides
+  those too (mentioned in the tutorial).
+- **Q2:** toggle state is **saved (PlayerPrefs)** and persists across `RESTART`.
+
+### 4.3 Tasks
+- [x] Add `showCompany / showPrices / showNodes / showInfo` flags.
+- [x] Add the four toggle buttons to the top bar.
+- [x] Wrap `CompanyPanel()`, `MarketPanel()`, `NodePanel()` in `if (show…)`.
+- [x] Save/restore toggle state with `PlayerPrefs` (`SaveToggles`/`LoadToggles`).
+- [x] Verify the layout still works when all three are off (top bar + log remain).
+
+---
+
+## 5. Order of work
+1. **D — panel toggles** (easiest; builds the top bar where the other buttons go)
+2. **B — arrows** (small, isolated)
+3. **A — price colors** (the core visual)
+4. **C — tutorial** (largest; references §1's color legend)
+
+## 6. Acceptance checklist (done = playable AND understandable)
+- [x] Every price row tinted green/red/neutral per §1.2; the special resource reads green.
+- [x] Every price row also has a small colored position slider + marker (Q1 add-on).
+- [x] Priority list uses ▲/▼ and behaves correctly at the top/bottom edges.
+- [x] **INFO** opens/closes from the top bar as a full overlay (top bar stays visible) and shows recipes, module costs, taxes, trading, and the color legend.
+- [x] Your Company / Prices / Nodes each have a working top-bar toggle (on by default).
+- [x] Panel-toggle state persists across a `RESTART` (Q2).
+- [x] All features survive a `RESTART`.
+- [ ] GDD hub: add a short **UI/UX** note + `[[link]]` to `GameView`.
+
+## 7. Design decisions (RESOLVED)
+- **Q1** — Tint **and** a small position slider. ✅ Both implemented: the row
+      background is tinted, and a small bar under each price shows the exact
+      position (colored fill + white marker). The slider re-uses the same
+      red/green heat color.
+- **Q2** — Panel-toggle state **persists across `RESTART`**. ✅ Saved to
+      `PlayerPrefs` (`view_showCompany/Prices/Nodes/Info`); first run keeps
+      the defaults (Company/Prices/Nodes ON, INFO OFF).
+- **Q3** — INFO is a **full-screen overlay**, but the top bar is **not covered**
+      so it can be toggled off with `[x] INFO` (or the `CLOSE` button). ✅
+- **Q4** — Arrow glyph: **filled triangles ▲/▼**. ✅
