@@ -25,6 +25,22 @@ public class MenuView : MonoBehaviour
     public Color previewWaterColor = new Color(0.14f, 0.26f, 0.42f);
     public Color previewGroundColor = new Color(0.30f, 0.34f, 0.32f);
 
+    // ---- node prefabs (SAME references as GameView, so the creator shows the
+    //      exact models the game uses; empty slot = placeholder shape) ----
+    [Header("Node Prefabs (drag the SAME prefabs you use on the GameView)")]
+    [Tooltip("Must match the GameView's prefab slots for the preview to look like the game. Empty slot = placeholder shape from NodeShapes.")]
+    public bool usePrefabs = true;
+    [Tooltip("Raw hubs: Wood / Metal / Energy / Water.")]
+    public GameObject prefabWood;
+    public GameObject prefabMetal;
+    public GameObject prefabEnergy;
+    public GameObject prefabWater;
+    [Tooltip("Factories: Chips / Mech Parts / Building Materials / Food.")]
+    public GameObject prefabChips;
+    public GameObject prefabMechParts;
+    public GameObject prefabBuilding;
+    public GameObject prefabFood;
+
     [Header("Ownership colors (match the in-game colors)")]
     public Color playerColor = new Color(0.30f, 0.75f, 0.35f);
     public Color aiColor = new Color(0.80f, 0.30f, 0.30f);
@@ -39,6 +55,7 @@ public class MenuView : MonoBehaviour
     string previewError = "";
     List<Node> previewNodes = new List<Node>();
     GameObject previewRoot;
+    List<TextMesh> previewLabels = new List<TextMesh>();
     bool rebuildQueued;
 
     // live grid editor: click a cell in the text grid to paint it
@@ -95,6 +112,7 @@ public class MenuView : MonoBehaviour
         DestroyPreview();
         previewError = "";
         previewNodes.Clear();
+        previewLabels.Clear();
 
         MapDefinition map = (setup.mapMode == 0) ? PreviewMap() : null;
         Random.InitState(setup.seed);
@@ -169,10 +187,29 @@ public class MenuView : MonoBehaviour
     {
         if (!show3DPreview) return;
         if (previewRoot == null) previewRoot = new GameObject("PreviewMap");
-        var body = NodeShapes.Build(previewRoot.transform, n);
-        body.transform.position = new Vector3(n.Position.x, 0f, n.Position.y);
-        foreach (var r in body.GetComponentsInChildren<Renderer>())
-            r.material.color = owner;
+
+        // node body: the SAME prefab the game uses (or the placeholder shape when
+        // the slot is empty) - shared with GameView via NodeVisuals
+        var bodyRoot = new GameObject("Node_" + n.Id);
+        bodyRoot.transform.SetParent(previewRoot.transform, false);
+        bodyRoot.transform.position = new Vector3(n.Position.x, 0f, n.Position.y);
+        // SAME SIZE AS THE GAME: in the game the node model + label are parented
+        // under the ownership-area plane, which GameView sets to 0.45 - so they
+        // render at 0.45x. This preview root is otherwise unscaled (1.0), which
+        // made the same model ~2.2x too big here and caused it to clip into
+        // neighbouring nodes. Setting the node root to the shared NodeScale
+        // scales the model AND its label together, exactly matching the game.
+        bodyRoot.transform.localScale = Vector3.one * NodeVisuals.NodeScale;
+        var parts = NodeVisuals.BuildNodeBody(bodyRoot.transform, n, usePrefabs,
+            prefabWood, prefabMetal, prefabEnergy, prefabWater,
+            prefabChips, prefabMechParts, prefabBuilding, prefabFood);
+        foreach (var r in parts)
+            if (r != null) r.material.color = NodeVisuals.Brighten(owner, 1.25f);
+
+        // floating name label above the node - same as in game, rotated 90
+        // degrees so the text points UP (readable from the top-down camera)
+        previewLabels.Add(NodeVisuals.AddLabel(bodyRoot.transform,
+            NodeVisuals.ShortName(n), NodeVisuals.Brighten(owner, 1.25f)));
     }
 
     void BuildPreviewTerrain(MapDefinition map)
@@ -218,6 +255,7 @@ public class MenuView : MonoBehaviour
     void DestroyPreview()
     {
         if (previewRoot != null) { Destroy(previewRoot); previewRoot = null; }
+        previewLabels.Clear();
     }
 
     int SelectedPremadeIndex()
@@ -567,7 +605,31 @@ public class MenuView : MonoBehaviour
             ColorDot(govColor); GUILayout.Label("government", Small());
             GUILayout.EndHorizontal();
         }
+
+        // ---- node model legend: maps each grid character to the 3D model the
+        //      preview + game will show for it (makes the 3D preview readable) ----
+        GUILayout.Space(6);
+        GUILayout.Label("NODE MODELS  (3D preview + game: which model each node uses)", Bold());
+        GUILayout.Label("Each node shows the prefab assigned to its resource; an empty slot shows a placeholder shape.", Small());
+        ModelLegendRow("Wood", "W", prefabWood);
+        ModelLegendRow("Metal", "M", prefabMetal);
+        ModelLegendRow("Energy", "E", prefabEnergy);
+        ModelLegendRow("Water", "a", prefabWater);
+        ModelLegendRow("Chips", "C", prefabChips);
+        ModelLegendRow("Mech Parts", "P", prefabMechParts);
+        ModelLegendRow("Building", "B", prefabBuilding);
+        ModelLegendRow("Food", "F", prefabFood);
         GUILayout.EndVertical();
+    }
+
+    /// <summary>One legend row: resource name + code + the prefab assigned to it.</summary>
+    void ModelLegendRow(string name, string code, GameObject prefab)
+    {
+        GUILayout.BeginHorizontal();
+        GUILayout.Label(code + " ", Small(), GUILayout.Width(18));
+        GUILayout.Label(name, GUILayout.Width(78));
+        GUILayout.Label((prefab != null) ? ("prefab: " + prefab.name) : "(no prefab - placeholder shape)", Small());
+        GUILayout.EndHorizontal();
     }
 
     /// <summary>

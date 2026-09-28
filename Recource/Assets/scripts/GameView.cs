@@ -249,19 +249,10 @@ public class GameView : MonoBehaviour
             nodeMarkerRenderers[i] = BuildNodeVisual(nodeGo.transform, n);
 
             // floating label above the node (Q8: type + production + owner color)
-            var labelGo = new GameObject("Label_" + n.Id);
-            labelGo.transform.SetParent(area.transform, false);
-            labelGo.transform.localPosition = new Vector3(0f, 3.6f, 0f);
-            var tm = labelGo.AddComponent<TextMesh>();
-            // Unity 6: "Arial.ttf" is no longer a valid built-in font -> use "LegacyRuntime.ttf"
-            var f = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            if (f != null) tm.font = f;
-            tm.text = ShortName(n);
-            tm.fontSize = 40;
-            tm.color = Brighten(GameSimulator.ColorOf(n), 1.25f);
-            tm.anchor = TextAnchor.UpperCenter;
-            tm.alignment = TextAlignment.Center;
-            nodeLabels[i] = tm;
+            // NodeVisuals.AddLabel: same label as the map editor, rotated 90
+            // degrees around X so the text points UP toward the top-down camera
+            nodeLabels[i] = NodeVisuals.AddLabel(area.transform,
+                NodeVisuals.ShortName(n), Brighten(GameSimulator.ColorOf(n), 1.25f));
         }
 
         UpdateMapBounds();
@@ -327,64 +318,20 @@ public class GameView : MonoBehaviour
 
     /// <summary>
     /// The node's body: your prefab if the slot is filled, else the placeholder
-    /// shapes. Returns every part's renderer so Refresh() can tint ownership.
+    /// shapes. Shared with the map editor's live preview (NodeVisuals), so the
+    /// creator shows the exact same models as the game. Returns every part's
+    /// renderer so Refresh() can tint ownership.
     /// </summary>
     Renderer[] BuildNodeVisual(Transform parent, Node n)
     {
-        GameObject body = null;
-        if (usePrefabs)
-        {
-            var p = PrefabFor(n);
-            if (p != null)
-            {
-                body = Instantiate(p, parent);
-                body.name = "Prefab_" + n.Id;
-                body.transform.localPosition = Vector3.zero;
-                // authoring notes (plan section 4): no colliders/scripts on the prefab;
-                // strip defensively so the node stays click-transparent
-                foreach (var c in body.GetComponents<Collider>()) Destroy(c);
-            }
-        }
-        if (body == null)
-            body = NodeShapes.Build(parent, n);
-
-        var parts = body.GetComponentsInChildren<Renderer>();
-        var list = new Renderer[parts.Length];
-        for (int i = 0; i < parts.Length; i++)
-        {
-            if (parts[i].sharedMaterial == null) continue;
-            parts[i].material.color = Brighten(GameSimulator.ColorOf(n), 1.25f);
-            list[i] = parts[i];
-        }
+        var list = NodeVisuals.BuildNodeBody(parent, n, usePrefabs,
+            prefabWood, prefabMetal, prefabEnergy, prefabWater,
+            prefabChips, prefabMechParts, prefabBuilding, prefabFood);
+        Color tint = Brighten(GameSimulator.ColorOf(n), 1.25f);
+        for (int i = 0; i < list.Length; i++)
+            if (list[i] != null)
+                list[i].material.color = tint;
         return list;
-    }
-
-    /// <summary>Slot = Produced[0] + IsFactory (node-prefabs-camera-plan section 3).</summary>
-    GameObject PrefabFor(Node n)
-    {
-        if (n.Produced.Count == 0) return null;
-        var r = n.Produced[0];
-        if (n.IsFactory)
-        {
-            switch (r)
-            {
-                case ResourceType.Chips: return prefabChips;
-                case ResourceType.MechanicalParts: return prefabMechParts;
-                case ResourceType.BuildingMaterials: return prefabBuilding;
-                case ResourceType.Food: return prefabFood;
-            }
-        }
-        else
-        {
-            switch (r)
-            {
-                case ResourceType.Wood: return prefabWood;
-                case ResourceType.Metal: return prefabMetal;
-                case ResourceType.Energy: return prefabEnergy;
-                case ResourceType.Water: return prefabWater;
-            }
-        }
-        return null;
     }
 
     void UpdateMapBounds()
@@ -430,7 +377,7 @@ public class GameView : MonoBehaviour
                     if (nodeMarkerRenderers[i][p] != null)
                         nodeMarkerRenderers[i][p].material.color = Brighten(c, 1.25f);
             }
-            string shortName = ShortName(n);
+            string shortName = NodeVisuals.ShortName(n);
             if (nodeLabels[i] != null)
             {
                 nodeLabels[i].color = Brighten(c, 1.25f);
@@ -440,17 +387,7 @@ public class GameView : MonoBehaviour
         }
     }
 
-    string ShortName(Node n)
-    {
-        string s = (n.Id + 1) + " ";
-        for (int i = 0; i < n.Produced.Count && i < 2; i++)
-        {
-            if (i > 0) s += "+";
-            s += MaterialCatalog.Code(n.Produced[i]);
-        }
-        if (n.IsFactory) s += "F";
-        return s;
-    }
+    // (ShortName moved to NodeVisuals.ShortName, shared with the map editor)
 
     void RemoveCollider(GameObject go)
     {

@@ -1,0 +1,143 @@
+﻿# ACTION DOC — Make the Map Creator show the SAME node models as the game
+> Date: 2025-06 (session "map creator models parity")
+> Status: CODE DONE. What remains is a one-time Unity Editor setup + verification.
+
+---
+
+## 1. STATE OF THE CODE (already implemented, no code work left)
+
+- `Assets/scripts/NodeVisuals.cs` — shared node-visuals helper:
+  - `PrefabFor(...)`     — slot rule: node's `Produced[0]` + `IsFactory` (raw hubs
+                            vs factories), same mapping the game uses.
+  - `BuildNodeBody(...)` — instantiates the prefab if its slot is filled,
+                            otherwise falls back to the `NodeShapes` placeholder.
+  - `AddLabel(...)`      — floating name label, rotated -90° around X so the
+                            text points UP (readable from the top-down camera).
+  - `ShortName(...)`     — label text ("3 W", "7 ChF", ...).
+- `GameView.cs`          — in-game map; delegates body/label building to
+                            `NodeVisuals`. Its 8 prefab slots live on the
+                            "gameconfig" object in the GAME scene.
+- `MenuView.cs`          — map creator; its 3D preview now also builds bodies
+                            through `NodeVisuals.BuildNodeBody(...)`. It has its
+                            OWN 8 prefab slots (see section 4) plus a `usePrefabs`
+                            toggle and a NODE MODELS legend in the IMGUI UI.
+
+Why two sets of slots? Prefab references are serialized per-component, so the
+creator cannot "see" the GameView's slots automatically (they are in a different
+scene). The fix is: drag the SAME prefab references into both. The code then
+guarantees identical rendering logic on both sides.
+
+---
+
+## 2. THE 8 SLOTS (identical names on both components)
+
+| Slot             | Raw hub (IsFactory = false) | Factory (IsFactory = true) |
+|------------------|-----------------------------|----------------------------|
+| prefabWood       | Wood (W)                    | —                          |
+| prefabMetal      | Metal (M)                   | —                          |
+| prefabEnergy     | Energy (E)                  | —                          |
+| prefabWater      | Water (a)                   | —                          |
+| prefabChips      | —                           | Chips (C)                  |
+| prefabMechParts  | —                           | Mechanical Parts (P)       |
+| prefabBuilding   | —                           | Building Materials (B)     |
+| prefabFood       | —                           | Food (F)                   |
+
+Rule: an EMPTY slot always falls back to the placeholder shape
+(`NodeShapes`), so a partially filled set still works — you never get an
+invisible node.
+
+---
+
+## 3. ONE-TIME SETUP (do this in the Unity Editor, ~2 minutes)
+
+### Step A — find the game's prefab references (the source of truth)
+1. Open the **GAME scene** (the one containing the "gameconfig" object).
+2. Select the **gameconfig** GameObject in the Hierarchy.
+3. In the Inspector, find the **GameView** component → **Node Prefabs** section.
+4. Note which prefab assets are assigned to the 8 slots
+   (Wood / Metal / Energy / Water / Chips / Mech Parts / Building / Food).
+   Any slot shown as *None* means the game itself uses the placeholder there.
+
+### Step B — assign the same references on the MenuView
+1. Open **Assets/Scenes/MenuScene.unity**.
+2. Select the GameObject that has the **MenuView** component (the one the
+   map-setup screen runs on).
+3. In the Inspector, find the **MenuView** component → **Node Prefabs**
+   section (right under "Live 3D preview").
+4. Drag the SAME prefab assets from Step A into the matching 8 slots:
+   - `prefabWood`, `prefabMetal`, `prefabEnergy`, `prefabWater`
+   - `prefabChips`, `prefabMechParts`, `prefabBuilding`, `prefabFood`
+   - Leave a slot as *None* only if it was also *None* on the GameView.
+5. Keep **Use Prefabs** checked (`usePrefabs = true`) — unchecking it forces
+   placeholders everywhere in the creator (useful only for testing the
+   fallback shapes).
+6. **Save the scene** (Ctrl+S).
+
+### Step C — optional but recommended: fill missing slots on BOTH views
+If in Step A some slots were *None* (most likely Chips / MechParts):
+- either accept the placeholder shapes in game AND creator (they match), or
+- create/assign real prefabs and put them on BOTH the GameView (game scene
+  "gameconfig") AND the MenuView (menu scene) — both sides must stay in sync
+  manually, since the references are not shared by the engine.
+
+---
+
+## 4. VERIFY (3 minutes)
+
+1. Enter **Play Mode** (MenuScene).
+2. In the map creator, pick the **Finland** preset (slot 5 of premade maps).
+3. Check the live 3D preview:
+   - [ ] Wood/Metal/Energy/... hubs show the SAME models as in the game
+       (compare against a quick in-game start, or against your memory of
+       the game map).
+   - [ ] Factory nodes (Chips C, MechParts P, Building B, Food F) use the
+       factory prefabs.
+   - [ ] Any slot left empty shows the placeholder shape (colored cube/cylinder)
+       — NOT an invisible node.
+   - [ ] Labels above nodes ("3 W", "7 ChF") point UP toward the camera,
+       readable from the top-down angle (not lying on their side).
+   - [ ] The **NODE MODELS legend** in the menu UI lists each resource with
+       its assigned prefab name (or "(placeholder)").
+4. Pan/zoom (WASD + mouse) and confirm nothing drifts off-grid: the body is
+   parented at the cell position, so moving the camera must not move nodes.
+5. Switch the map (e.g. Classic 5x4) and confirm the preview rebuilds with
+   the same models.
+6. Press **START GAME** and confirm the in-game map looks identical to the
+   preview it came from. That is the acceptance test.
+
+---
+
+## 5. TROUBLESHOOTING
+
+| Symptom | Cause / fix |
+|---|---|
+| Creator shows placeholders while game shows models | MenuView slots are empty → do Step B. |
+| Game shows placeholders while creator shows models | GameView slots are empty → assign prefabs on "gameconfig" in the game scene. |
+| Creator and game models DIFFER | Different assets dragged into the same slot → use the exact same prefab file in both. |
+| Label reads sideways or mirrored | Should not happen after the -90° X rotation fix; if it does, check you're on the latest `NodeVisuals.AddLabel` build (Unity 6 + "LegacyRuntime.ttf" font). |
+| Node floats above/below its cell | Prefab has a non-zero pivot/offset inside it → bake the pivot to the base in the prefab (Prefab > Set as Static off, adjust root transform) — the code zeroes localPosition on the instance, it cannot fix a shifted prefab origin. |
+| Nodes can't be clicked through / extra colliders | `BuildNodeBody` strips all Colliders from the instance, so colliders on the prefab are harmless; if you see weird physics, the prefab likely has a script — remove it (plan section 4 authoring rule: no colliders/scripts on node prefabs). |
+| Menu UI shows "(placeholder)" in the legend for a filled slot | You filled the GameView but not the MenuView slot — the legend reads the MenuView's own slots. |
+
+---
+
+## 6. RULE OF THUMB GOING FORWARD
+
+- Prefab slots are NOT shared between the two components by the engine.
+- **Any time you change a node prefab (new model, re-skin), update BOTH:**
+  1. GameView → Node Prefabs (game scene, "gameconfig")
+  2. MenuView → Node Prefabs (menu scene)
+- `NodeVisuals` keeps the rendering logic identical, so as long as the
+  references match, the creator is always a faithful preview of the game.
+
+---
+
+## 7. OPTIONAL LATER (not done, no action needed now)
+
+- A "Copy prefabs from GameView" convenience button on the MenuView that
+  finds a GameView in the same scene and copies its 8 slots over, so the
+  manual sync in section 6.2 disappears. (Only useful in editor/test scenes
+  where both views coexist.)
+- A `[RequireComponent]`-style editor check that warns (editor-time
+  `OnValidate` on MenuView) when the 8 slots differ from a GameView found
+  via `GameObject.Find` — nice guard rail, same benefit, zero runtime cost.

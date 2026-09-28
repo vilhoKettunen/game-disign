@@ -157,6 +157,15 @@ MonoBehaviour:
   show3DPreview: 1
   previewWaterColor: {r: 0.14, g: 0.26, b: 0.42, a: 1}
   previewGroundColor: {r: 0.3, g: 0.34, b: 0.32, a: 1}
+  usePrefabs: 1
+  prefabWood: {fileID: 7675611547253850764, guid: ae15dff642341d642b8081e2796f1a0f, type: 3}
+  prefabMetal: {fileID: 8868672413481499367, guid: 5245fd67d829ee84faec9c4bd2ea1ec6, type: 3}
+  prefabEnergy: {fileID: 55438330931712552, guid: d6263509481b92f4d98974df37d32c45, type: 3}
+  prefabWater: {fileID: 7938248718936897090, guid: e8bcdec9a08533146af66a51480e32bb, type: 3}
+  prefabChips: {fileID: 0}
+  prefabMechParts: {fileID: 0}
+  prefabBuilding: {fileID: 8817527474849585099, guid: 8b3f6c1a53741d34f8581978c77fbe1d, type: 3}
+  prefabFood: {fileID: 6681794848928602433, guid: 4a31b1e99a6ab3449b7cf53b976e5d23, type: 3}
   playerColor: {r: 0.3, g: 0.75, b: 0.35, a: 1}
   aiColor: {r: 0.8, g: 0.3, b: 0.3, a: 1}
   govColor: {r: 0.55, g: 0.55, b: 0.55, a: 1}
@@ -187,6 +196,7 @@ GameObject:
   - component: {fileID: 2000000012}
   - component: {fileID: 2000000011}
   - component: {fileID: 2000000014}
+  - component: {fileID: 2000000015}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -312,6 +322,40 @@ MonoBehaviour:
     m_VarianceClampScale: 0.9
     m_ContrastAdaptiveSharpening: 0
   m_Version: 2
+--- !u!114 &2000000015
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2000000010}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a79a7e6bc76a16f43977a6817dbb56b4, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CameraController
+  panSpeed: 20
+  dragSpeed: 0.05
+  enableWASD: 1
+  enableLeftDrag: 1
+  enableRightDrag: 1
+  enableEdgeScroll: 0
+  edgeMargin: 28
+  edgeScrollBoost: 1.6
+  enableWheelZoom: 1
+  zoomMin: 10
+  zoomMax: 60
+  wheelZoomStrength: 1.6
+  zoomToCursor: 1
+  enableAngleDrag: 1
+  angleMin: 20
+  angleMax: 85
+  angleStart: 50
+  angleDragSpeed: 0.25
+  smoothing: 12
+  clampToMap: 1
+  boundsMargin: 10
+  enableResetKey: 1
 --- !u!1 &2000000020
 GameObject:
   m_ObjectHideFlags: 0

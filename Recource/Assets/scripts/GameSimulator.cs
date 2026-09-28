@@ -7,7 +7,8 @@ using UnityEngine;
 /// AI companies and win/lose (implements all four GDD plans).
 ///
 /// - core-loop: tick every config.TickSeconds (default 60s), tax every 5 ticks,
-///   win = own all nodes + all companies gone, lose = 2 failed taxes in a row
+///   win = be the only company left (player: last competitor bought out;
+///         AI: also owns every node), lose = 2 failed taxes in a row
 /// - trading: resource-for-resource trades accepted only when you offer MORE value,
 ///   node/company purchases, government prices re-rolled each tax cycle
 /// - resource-hub: nodes produce per tick, 5 module slots, 2x production / 2x storage modules
@@ -536,6 +537,26 @@ public class GameSimulator : MonoBehaviour
         buyer.Nodes.Add(n);
         AddLog(buyer.Name + " bought " + n.Name + " from " + seller.Name
              + " for " + value.ToString("0") + " PP worth of " + MaterialCatalog.Name(offerR));
+
+        // A company without ANY nodes left is out of business: the buyer now
+        // holds everything it had, so the seller counts as bought out at the
+        // same time (mirrors BuyOutCompany: seller is removed from the game).
+        if (seller.Alive && seller.Nodes.Count == 0)
+        {
+            seller.Alive = false;
+            seller.PoliticalPower = 0f;
+            AddLog(buyer.Name + " took over " + seller.Name
+                 + " - it owns no nodes anymore, so it is bought out and out of the game.");
+            if (seller.IsPlayer)
+            {
+                // Same as Bankrupt: the player losing the company ends the game.
+                GameOver = true;
+                Winner = null;
+                GameOverText = "BANKRUPT - you lost your last node to " + buyer.Name
+                             + ". Your company has been bought out.";
+            }
+        }
+
         CheckEnd();
         StateChanged();
         result = "ok";
@@ -788,21 +809,33 @@ public class GameSimulator : MonoBehaviour
         foreach (var c in Companies)
         {
             if (!c.Alive) continue;
-            int owned = 0;
-            foreach (var n in Nodes) if (n.Owner == c) owned++;
-            if (owned < Nodes.Count) continue;
 
             bool allGone = true;
             foreach (var o in Companies)
                 if (o != c && o.Alive) { allGone = false; break; }
             if (!allGone) continue;
 
+            // PLAYER: being the only company left is enough - a monopoly by default.
+            // (Buying out the last competitor wins, even if some nodes are still
+            //  government-owned.)
+            if (c.IsPlayer)
+            {
+                GameOver = true;
+                Winner = c;
+                GameOverText = "YOU WIN!\nEvery competitor is gone - your company is the only one left in the country. Monopoly achieved!";
+                AddLog("=== " + GameOverText.Replace("\n", " ") + " ===");
+                return;
+            }
+
+            // AI: must also own every node to become the monopoly (and with the
+            //  player gone, the game is over for real).
+            int owned = 0;
+            foreach (var n in Nodes) if (n.Owner == c) owned++;
+            if (owned < Nodes.Count) continue;
+
             GameOver = true;
             Winner = c;
-            if (c.IsPlayer)
-                GameOverText = "YOU WIN!\nYou own every node on the map - your company is the last monopoly in the country.";
-            else
-                GameOverText = c.Name + " became the monopoly and owns everything.\nYou lost.";
+            GameOverText = c.Name + " became the monopoly and owns everything.\nYou lost.";
             AddLog("=== " + GameOverText.Replace("\n", " ") + " ===");
             return;
         }
