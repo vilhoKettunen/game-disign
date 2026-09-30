@@ -154,8 +154,8 @@ MonoBehaviour:
   prefabMetal: {fileID: 8868672413481499367, guid: 5245fd67d829ee84faec9c4bd2ea1ec6, type: 3}
   prefabEnergy: {fileID: 55438330931712552, guid: d6263509481b92f4d98974df37d32c45, type: 3}
   prefabWater: {fileID: 7938248718936897090, guid: e8bcdec9a08533146af66a51480e32bb, type: 3}
-  prefabChips: {fileID: 0}
-  prefabMechParts: {fileID: 0}
+  prefabChips: {fileID: 6681794848928602433, guid: d96bcb1efe4bfb04bb6fbcaef7bdc6be, type: 3}
+  prefabMechParts: {fileID: 6681794848928602433, guid: 0b9b4ce1870cd1445a55e08c50056bc9, type: 3}
   prefabBuilding: {fileID: 8817527474849585099, guid: 8b3f6c1a53741d34f8581978c77fbe1d, type: 3}
   prefabFood: {fileID: 6681794848928602433, guid: 4a31b1e99a6ab3449b7cf53b976e5d23, type: 3}
   renderGround: 1

@@ -18,6 +18,17 @@ public class Company
     public readonly Dictionary<ResourceType, float> Inventory =
         new Dictionary<ResourceType, float>();
 
+    // ---- fractional production buffers (inventory-tax-ui-polish-plan §3) ----
+    // Accumulate float output; release only whole units to Inventory.
+    public readonly Dictionary<ResourceType, float> OutputFraction =
+        new Dictionary<ResourceType, float>();
+    // Accumulate float input consumption; deduct only whole units from Inventory.
+    public readonly Dictionary<ResourceType, float> InputFraction =
+        new Dictionary<ResourceType, float>();
+
+    // ---- tax carry-over (Q2: fractional PP that couldn't be paid in whole units) ----
+    public float TaxCarryOver;
+
     // ---- tax state (tax-system-plan) ----
     public float ExtraTaxPct; // 0..1, player-chosen extra tax % (tax-plan Q3)
     public List<ResourceType> PaymentPriority; // which resources to pay the tax with, in order (tax-plan Q1)
@@ -38,6 +49,8 @@ public class Company
         for (int i = 0; i < MaterialCatalog.ResourceCount; i++)
         {
             Inventory.Add((ResourceType)i, 0f);
+            OutputFraction.Add((ResourceType)i, 0f);
+            InputFraction.Add((ResourceType)i, 0f);
             PaymentPriority.Add((ResourceType)i);
         }
     }

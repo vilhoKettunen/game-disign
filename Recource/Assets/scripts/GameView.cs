@@ -537,14 +537,20 @@ public class GameView : MonoBehaviour
 
         GUILayout.Space(6);
         GUILayout.Label("PAY TAX WITH (priority order):");
+        GUILayout.Label("Shift+▲ = to top · Shift+▼ = to bottom (plain click = move one step)", Small);
         for (int idx = 0; idx < p.PaymentPriority.Count; idx++)
         {
             var r = p.PaymentPriority[idx];
-            GUILayout.BeginHorizontal();
+            bool shift = (Keyboard.current != null && Keyboard.current.shiftKey.isPressed);
+            GUILayout.BeginHorizontal(ZebraStyle(idx % 2 == 0));
             GUILayout.Label((idx + 1) + ". " + MaterialCatalog.Name(r), GUILayout.Width(200));
             if (GUILayout.Button("▲", "minibutton", GUILayout.Width(28)))
             {
-                if (idx > 0)
+                if (shift)
+                {
+                    MoveToTop(p, idx);
+                }
+                else if (idx > 0)
                 {
                     var tmp = p.PaymentPriority[idx - 1];
                     p.PaymentPriority[idx - 1] = r;
@@ -553,7 +559,11 @@ public class GameView : MonoBehaviour
             }
             if (GUILayout.Button("▼", "minibutton", GUILayout.Width(28)))
             {
-                if (idx < p.PaymentPriority.Count - 1)
+                if (shift)
+                {
+                    MoveToBottom(p, idx);
+                }
+                else if (idx < p.PaymentPriority.Count - 1)
                 {
                     var tmp = p.PaymentPriority[idx + 1];
                     p.PaymentPriority[idx + 1] = r;
@@ -564,21 +574,26 @@ public class GameView : MonoBehaviour
         }
 
         GUILayout.Space(6);
-        GUILayout.Label("INVENTORY  (prod/con per tick | stock/limit)");
-        GUILayout.Label("prod/con are the REAL rates - fractions appear when a factory is starved of inputs or storage is full.", Small);
+        GUILayout.Label("INVENTORY  (flow per tick | stock/limit | efficiency)");
+        GUILayout.Label("efficiency: green = fully supplied · grey = half · red = starved/full", Small);
         for (int i = 0; i < MaterialCatalog.ResourceCount; i++)
         {
             var r = (ResourceType)i;
             float prod = S.ProducedPerTick(p, r);
             float cons = S.ConsumedPerTick(p, r);
-            // Show ONE decimal: a factory running at 50% efficiency produces
-            // e.g. 1.0/tick, not 0 - whole-number rounding used to make live
-            // materials read as "(unused)".
+            float eff = ResourceEfficiency(p, r);
+            int stock = Mathf.FloorToInt(p.GetInventory(r));
+            int limit = Mathf.FloorToInt(p.CapacityFor(r, S.config.BaseCapacityPerResource));
+            bool unused = (prod <= 0.001f && cons <= 0.001f);
             string flow = (prod > 0.001f || cons > 0.001f)
-                ? "  " + prod.ToString("0.0") + "/" + cons.ToString("0.0") + " per tick"
-                : "  - (unused)";
-            GUILayout.Label("  " + MaterialCatalog.Name(r) + flow + "   " + p.GetInventory(r).ToString("0.0")
-                + " / " + p.CapacityFor(r, S.config.BaseCapacityPerResource).ToString("0"));
+                ? "+" + prod.ToString("0.0") + " / -" + cons.ToString("0.0") + " per tick"
+                : "(unused)";
+            string row = "  " + MaterialCatalog.Name(r) + "   " + flow
+                + "   stock " + stock + "/" + limit
+                + "   [ " + Mathf.RoundToInt(eff * 100f) + "% ]";
+            // Q1: tint the ENTIRE row (incl. name) with the efficiency color
+            // so it is obvious which item the player is lacking.
+            GUILayout.Label(row, EffRowStyle(eff));
         }
         GUILayout.Label("Total inventory value: ~" + p.InventoryValue(S.market).ToString("0") + " PP  (tax is taken from this)");
         GUILayout.Label("Next node costs you: " + S.NextNodeCost(p).ToString("0") + " PP (gov node OR rival node - same price)");
@@ -961,6 +976,99 @@ public class GameView : MonoBehaviour
             _redStyle.normal.textColor = new Color(1f, 0.35f, 0.3f);
         }
         return _redStyle;
+    }
+
+    // ---- zebra row styles (inventory-tax-ui-polish-plan §1.2) ----
+    static Texture2D _zebraEvenTex;
+    static Texture2D _zebraOddTex;
+    GUIStyle _zebraEven;
+    GUIStyle _zebraOdd;
+    GUIStyle _effStyle;
+
+    static Texture2D ZebraTexture(Color c)
+    {
+        var tex = new Texture2D(1, 1);
+        tex.SetPixel(0, 0, c);
+        tex.Apply();
+        return tex;
+    }
+
+    /// <summary>Zebra row style: even rows darker, odd rows lighter (§1.2).</summary>
+    GUIStyle ZebraStyle(bool even)
+    {
+        var s = even ? _zebraEven : _zebraOdd;
+        if (s == null)
+        {
+            var tex = (even) ? _zebraEvenTex : _zebraOddTex;
+            if (tex == null)
+            {
+                tex = ZebraTexture(even ? new Color(0.16f, 0.16f, 0.16f, 1f)
+                                        : new Color(0.28f, 0.28f, 0.28f, 1f));
+                if (even) _zebraEvenTex = tex; else _zebraOddTex = tex;
+            }
+            s = new GUIStyle(GUI.skin.label)
+            {
+                normal = { background = tex, textColor = Color.white },
+                padding = { left = 4 }
+            };
+            if (even) _zebraEven = s; else _zebraOdd = s;
+        }
+        return s;
+    }
+
+    /// <summary>Efficiency % color scale: green(100) → grey(50) → red(0) (§2.3).</summary>
+    Color EfficiencyColor(float e)
+    {
+        e = Mathf.Clamp01(e);
+        var grey = new Color(0.60f, 0.60f, 0.60f);
+        var green = new Color(0.30f, 0.85f, 0.35f);
+        var red = new Color(0.85f, 0.30f, 0.30f);
+        if (e >= 0.5f)
+            return Color.Lerp(grey, green, (e - 0.5f) * 2f);
+        else
+            return Color.Lerp(grey, red, (0.5f - e) * 2f);
+    }
+
+    /// <summary>Label style tinted with the efficiency color (for the whole row, Q1).</summary>
+    GUIStyle EffRowStyle(float e)
+    {
+        if (_effStyle == null) _effStyle = new GUIStyle(GUI.skin.label);
+        _effStyle.normal.textColor = EfficiencyColor(e);
+        return _effStyle;
+    }
+
+    /// <summary>Shift+▲ helper: jump resource to top of PaymentPriority (§1.3).</summary>
+    void MoveToTop(Company c, int idx)
+    {
+        if (idx <= 0) return;
+        var r = c.PaymentPriority[idx];
+        c.PaymentPriority.RemoveAt(idx);
+        c.PaymentPriority.Insert(0, r);
+    }
+
+    /// <summary>Shift+▼ helper: jump resource to bottom of PaymentPriority (§1.3).</summary>
+    void MoveToBottom(Company c, int idx)
+    {
+        if (idx >= c.PaymentPriority.Count - 1) return;
+        var r = c.PaymentPriority[idx];
+        c.PaymentPriority.RemoveAt(idx);
+        c.PaymentPriority.Add(r);
+    }
+
+    /// <summary>Per-resource efficiency (0..1) computed from potential vs actual (§2.2).</summary>
+    float ResourceEfficiency(Company c, ResourceType r)
+    {
+        float idealProd = S.PotentialProduction(c, r);
+        if (idealProd > 0.0001f)
+        {
+            return Mathf.Clamp01(S.ProducedPerTick(c, r) / idealProd);
+        }
+        float idealCons = S.PotentialConsumption(c, r);
+        if (idealCons > 0.0001f)
+        {
+            return Mathf.Clamp01(S.ConsumedPerTick(c, r) / idealCons);
+        }
+        return 0f;
     }
 
     int ResourceRow(string label, int current)

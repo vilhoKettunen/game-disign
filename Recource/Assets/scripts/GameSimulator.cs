@@ -282,19 +282,32 @@ public class GameSimulator : MonoBehaviour
                 if (eff <= 0f) continue;
                 float outAmt = maxOut * eff;
 
-                // Consume inputs scaled to the SAME efficiency as the output,
-                // so a speed-up raises consumption proportionally and a
+                // --- Consume inputs (buffered: accumulate float, deduct whole units) ---
+                // A speed-up raises consumption proportionally and a
                 // starved factory takes only what it actually converts.
                 foreach (var inR in n.Inputs)
                 {
                     float ratio = MaterialCatalog.InputAmount(outR, inR);
                     if (ratio <= 0f) continue;
                     float use = outAmt * ratio;
-                    float have = c.GetInventory(inR);
-                    c.SetInventory(inR, have - use);
+                    c.InputFraction[inR] += use;
+                    int wholeIn = Mathf.FloorToInt(c.InputFraction[inR]);
+                    if (wholeIn > 0)
+                    {
+                        c.InputFraction[inR] -= wholeIn;
+                        c.SetInventory(inR, c.GetInventory(inR) - wholeIn);
+                    }
                 }
 
-                c.SetInventory(outR, c.GetInventory(outR) + outAmt);
+                // --- Produce output (buffered: accumulate float, add whole units) ---
+                c.OutputFraction[outR] += outAmt;
+                int wholeOut = Mathf.FloorToInt(c.OutputFraction[outR]);
+                if (wholeOut > 0)
+                {
+                    c.OutputFraction[outR] -= wholeOut;
+                    c.SetInventory(outR, c.GetInventory(outR) + wholeOut);
+                }
+
                 c.ProducedValueThisCycle += outAmt * market.Price(outR);
             }
         }
@@ -349,6 +362,45 @@ public class GameSimulator : MonoBehaviour
     }
 
     /// <summary>
+    /// Potential output of resource r per tick: the full boosted rate assuming
+    /// full inputs and available space (no input-constraint). Used for efficiency %.
+    /// </summary>
+    public float PotentialProduction(Company c, ResourceType r)
+    {
+        float sum = 0f;
+        foreach (var n in c.Nodes)
+        {
+            if (!n.Produced.Contains(r)) continue;
+            float space = Mathf.Max(0f,
+                c.CapacityFor(r, config.BaseCapacityPerResource) - c.GetInventory(r));
+            sum += Mathf.Min(n.ProductionPerTick(r), space);
+        }
+        return sum;
+    }
+
+    /// <summary>
+    /// Potential input consumption of resource r per tick: the full boosted burn
+    /// assuming all inputs are available (no input-constraint).
+    /// Used for efficiency % on consumed-only (raw) resources.
+    /// </summary>
+    public float PotentialConsumption(Company c, ResourceType r)
+    {
+        float sum = 0f;
+        foreach (var n in c.Nodes)
+        {
+            if (!n.IsFactory) continue;
+            var outR = n.Produced[0];
+            float ratio = MaterialCatalog.InputAmount(outR, r);
+            if (ratio <= 0f) continue;
+            float space = Mathf.Max(0f,
+                c.CapacityFor(outR, config.BaseCapacityPerResource) - c.GetInventory(outR));
+            float maxOut = Mathf.Min(n.ProductionPerTick(outR), space);
+            sum += maxOut * ratio;
+        }
+        return sum;
+    }
+
+    /// <summary>
     /// The tax bill that will be due at the next tax tick: 30% of the accumulated
     /// production value of THIS tax cycle (+ penalty, + extra tax %). The bill
     /// accumulates over the whole tax cycle, not just the last tick.
@@ -392,31 +444,40 @@ public class GameSimulator : MonoBehaviour
                 });
             }
 
+            // Q2: tax only deducts WHOLE units; any leftover PP carries to next cycle.
+            float totalDue = quota + c.TaxCarryOver;
             float paid = 0f;
+            float remaining = totalDue;
             foreach (var r in order)
             {
-                if (paid >= quota - 0.001f) break;
+                if (remaining <= 0.001f) break;
                 float price = market.Price(r);
                 if (price <= 0f) continue;
-                float have = c.GetInventory(r);
-                float take = Mathf.Min(have, (quota - paid) / price);
-                if (take <= 0f) continue;
-                c.SetInventory(r, have - take);
-                paid += take * price;
+                int wholeHave = Mathf.FloorToInt(c.GetInventory(r));
+                if (wholeHave <= 0) continue;
+                int unitsNeeded = Mathf.Max(1, Mathf.FloorToInt(remaining / price));
+                int takeUnits = Mathf.Min(wholeHave, unitsNeeded);
+                if (takeUnits <= 0) continue;
+                c.SetInventory(r, c.GetInventory(r) - takeUnits);
+                paid += takeUnits * price;
+                remaining -= takeUnits * price;
             }
             c.LastTaxPaid = paid;
+            c.TaxCarryOver = Mathf.Max(0f, remaining);
 
-            if (quota <= 0.01f)
+            if (totalDue <= 0.01f)
             {
                 // nothing produced, nothing to pay
                 c.FailedTaxesInARow = 0;
+                c.TaxCarryOver = 0f;
                 c.ResetTaxCycle();
                 continue;
             }
 
-            if (paid >= quota - 0.001f)
+            if (paid >= totalDue - 0.001f)
             {
                 c.FailedTaxesInARow = 0;
+                c.TaxCarryOver = 0f;
                 float bonus = Mathf.Max(0f, paid - baseQuota) * config.ExtraTaxBonus;
                 c.PoliticalPower += paid + bonus;
                 AddLog(c.Name + " paid " + paid.ToString("0") + " PP tax -> +"
@@ -426,7 +487,7 @@ public class GameSimulator : MonoBehaviour
             {
                 c.FailedTaxesInARow++;
                 AddLog("!! " + c.Name + " FAILED tax: paid " + paid.ToString("0")
-                     + " of " + quota.ToString("0") + " -> WHOLE inventory seized (fail " + c.FailedTaxesInARow + "/"
+                     + " of " + totalDue.ToString("0") + " -> WHOLE inventory seized (fail " + c.FailedTaxesInARow + "/"
                      + config.BankruptAtFails + ", next bill +"
                      + Mathf.RoundToInt(config.PenaltyPerFail * 100f) + "%)");
                 if (c.FailedTaxesInARow >= config.BankruptAtFails) Bankrupt(c);

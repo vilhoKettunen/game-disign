@@ -1,0 +1,300 @@
+﻿# INVENTORY / TAX UI POLISH PLAN — "Recource"
+> Follow-up to `ui-polish-plan.txt`. Three focused improvements, all around the
+> **Your Company** panel plus one small production-model change.
+>
+> 1. **Tax "pay-with" list** — alternating row background + Shift+click to send
+>    an item straight to the top/bottom.
+> 2. **Inventory** — always-on produced/consumed display + a per-resource
+>    **efficiency %** with a green→grey→red color scale.
+> 3. **Production** — internal float math, but the player only ever receives
+>    whole (integer) units, one at a time once a full unit has accumulated.
+>
+> Design-first: the specs below ARE the design. Implement as written, then tick
+> the boxes. Everything must still work after `RESTART` / `NewGame()`.
+
+## 0. Scope, rules & files touched
+- UI changes live in `GameView.cs` (all IMGUI, no new packages / UI Toolkit).
+- Production-model change lives in `GameSimulator.cs` (+ a per-company float
+  "fractional buffer" stored on `Company.cs`).
+- Optional small helpers may be added to `Company.cs` (buffer) — nothing else
+  changes the public API in a breaking way.
+
+**Files touched**
+| File | What changes |
+|---|---|
+| `GameView.cs` | alternating row background, Shift+click top/bottom move, efficiency % color scale, always-on inventory |
+| `GameSimulator.cs` | `Produce()` uses a fractional buffer so only whole units land in inventory; `FactoryEfficiency` exposed for UI |
+| `Company.cs` | add `Dictionary<ResourceType,float> ProductionFraction` buffer + reset helper |
+
+---
+
+## 1. FEATURE A — Tax "pay-with" list: zebra rows + Shift+click jump
+### 1.1 Goal
+The `PAY TAX WITH (priority order)` list (in `CompanyPanel()`) is a plain stack
+of rows that is hard to scan. Make it:
+- **Visually distinct rows**: alternating background shade behind every other
+  line, so you can instantly tell which item sits on which row.
+- **Fast reordering**: a normal click on ▲/▼ still swaps with the neighbor
+  (unchanged). **Shift + click** on the ▲ or ▼ button sends that resource
+  **straight to the very top** (Shift+▲) or **very bottom** (Shift+▼) of the
+  list, no matter where it currently is.
+
+### 1.2 Zebra background (design decision — implement exactly this)
+- Two shades, both subtle dark greys so the white label text stays readable:
+  - even rows (0, 2, 4…): `Color(0.16, 0.16, 0.16, 1.0)`
+  - odd rows  (1, 3, 5…): `Color(0.28, 0.28, 0.28, 1.0)`
+- Technique (IMGUI): wrap each row in `GUILayout.BeginHorizontal("box")` and,
+  before that, draw a full-width background rectangle for the row using
+  `GUI.DrawTexture(rowRect, Texture2D.whiteTexture)` modulated by
+  `GUI.color`. Because `GUILayout` lays rows out sequentially, compute the row
+  `Rect` by drawing a zero-content placeholder first:
+  1. `GUILayout.BeginHorizontal()` → record `GUI.Window.current`/`GUIUtility.GetControlID`
+     is overkill; simplest reliable approach: draw the row inside a styled box.
+  - **Chosen approach (simple + robust):** give the row a `GUIStyle` that
+    carries the background color. Build two cached styles:
+      `zebraEven`  = base label style + `normal.background = whiteTex`,
+                     `normal.textColor` white, `padding.left=4`.
+      `zebraOdd`   = same but with a lighter background.
+    Set the style's background by creating a tiny 1x1 white `Texture2D` once
+    (cached static) and tinting it via the style's `normal.backgroundColor`
+    — this is the cleanest IMGUI zebra and avoids manual Rect math.
+  - Apply `GUILayout.BeginHorizontal(zebraEven/zebraOdd)` to every priority row.
+- The ▲ / ▼ buttons keep their `minibutton` look on top of the zebra background.
+- Add a one-line hint under the header:
+  "Shift+▲ = to top · Shift+▼ = to bottom (plain click = move one step)".
+
+### 1.3 Shift+click jump (behavior spec)
+- Detect the modifier with the new Input System: `Keyboard.current.shiftKey.isPressed`.
+- On **Shift + ▲** at row `idx`: remove that resource and re-insert it at index
+  `0` (front of `PaymentPriority`).
+- On **Shift + ▼** at row `idx`: remove it and append at the end.
+- Plain click behavior (single-step swap) is **unchanged**.
+- Edge cases: jumping the already-top item with Shift+▲ is a no-op; same for
+  bottom + Shift+▼. (Removing & re-inserting naturally handles both.)
+- Helper (in `GameView.cs`):
+  ```
+  void MoveToTop(Company c, int idx)
+  { var r = c.PaymentPriority[idx]; c.PaymentPriority.RemoveAt(idx);
+    c.PaymentPriority.Insert(0, r); }
+  void MoveToBottom(Company c, int idx)
+  { var r = c.PaymentPriority[idx]; c.PaymentPriority.RemoveAt(idx);
+    c.PaymentPriority.Add(r); }
+  ```
+- Note: `PaymentPriority` lives on `Company` (shared with AI). Reordering only
+  ever happens for the player via this UI, so no AI concern.
+
+### 1.4 Tasks
+- [ ] Cache the 1x1 white texture + two zebra styles (even/odd) as static fields.
+- [ ] Wrap each `PaymentPriority` row in the zebra style (alternate by `idx`).
+- [ ] Add `MoveToTop` / `MoveToBottom` helpers.
+- [ ] Wire Shift+▲ / Shift+▼ to jump-to-top/bottom; keep plain single-step swap.
+- [ ] Add the hint label.
+- [ ] Verify: zebra alternation reads clearly; Shift+click jumps correctly;
+      plain clicks still move one step; top/bottom edges no-op cleanly.
+
+---
+
+## 2. FEATURE B — Inventory: always-on flow + efficiency % color scale
+### 2.1 Goal
+The `INVENTORY` block currently shows `prod/con per tick` and `stock/limit`,
+and collapses to "- (unused)" when both are 0. Requirements:
+- **Always work & always display**: never hide a resource — every row always
+  shows production rate, consumption rate, stock/limit, **and** an efficiency %.
+- **Efficiency %** per resource, colored on a **green → grey → red** scale:
+  - `100%` → green, `0%` → red, `50%` → neutral grey.
+  - Higher than 50% blends grey→green; lower than 50% blends grey→red.
+  - Scale is linear in the efficiency value (see §2.2).
+
+### 2.2 Efficiency definition (design decision — implement exactly this)
+Efficiency = **how much of the resource's ideal activity is actually happening**,
+computed from the same numbers the UI already reads (`ProducedPerTick`,
+`ConsumedPerTick`, plus the ideal/potential values):
+
+- `prod`  = `S.ProducedPerTick(p, r)`  (actual output this tick, already float-accurate)
+- `cons`  = `S.ConsumedPerTick(p, r)`  (actual input burn this tick)
+- `idealProd` = potential output if fully supplied AND space available
+                (sum of `n.ProductionPerTick(r)` over nodes producing r, capped
+                 by available space) — exposed as a new `GameSimulator` method
+                 `PotentialProduction(p, r)`.
+- `idealCons` = potential input burn if those factories ran at 100%
+                (sum of `n.ProductionPerTick(outR) * ratio` over factories that
+                 consume r) — exposed as `GameSimulator.PotentialConsumption(p, r)`.
+
+Per-resource efficiency:
+- If the resource is **produced** (`idealProd > 0`): `eff = prod / idealProd`.
+- Else if **consumed** (`idealCons > 0`): `eff = cons / idealCons`.
+- Else (truly unused, no producers and no consumers): `eff = 0` and show grey,
+  with the row still displayed as "(unused)".
+- Clamp `eff` to `0..1`.
+
+(If a resource is both produced and consumed — currently impossible with the
+current recipe set, but keep it safe: use the produced definition, since
+production is the player-facing "output" signal.)
+
+### 2.3 Color scale (design decision — implement exactly this)
+Linear blend, anchored so `50%` is exactly grey:
+```
+e        = efficiency in [0,1]
+grey     = new Color(0.60, 0.60, 0.60)
+green    = new Color(0.30, 0.85, 0.35)
+red      = new Color(0.85, 0.30, 0.30)
+
+if (e >= 0.5)  c = Lerp(grey,  green, (e - 0.5) * 2)   // 0.5->grey, 1.0->green
+else           c = Lerp(grey,  red,   (0.5 - e) * 2)   // 0.5->grey, 0.0->red
+```
+Apply `c` as the **text color of the efficiency token** (e.g. ` 73%`) in the
+inventory row so the number is the thing that changes color — readable and
+unambiguous. Optionally (Q1) also tint the whole stock number the same way.
+
+### 2.4 Row format (new layout)
+Each inventory row becomes (all on one line, `Small` helper font for the
+legend only):
+```
+  <Name>   +<prod>/-<cons> per tick   stock <stock>/<limit>   [ <eff>% ]
+```
+- `prod` and `cons` always shown (one decimal, e.g. `+2.0 / -1.5`).
+- `stock` shown as integer floor for the displayed count **but** the underlying
+  value is float (see §3); display `Mathf.Floor(stock).ToString("0")` so the
+  player sees only whole units (matches the new integer-only output rule).
+- `[ <eff>% ]` colored per §2.3.
+- A one-line legend above the list:
+  "efficiency: green = fully supplied · grey = half · red = starved/full".
+
+### 2.5 Tasks
+- [ ] Add `GameSimulator.PotentialProduction(c, r)` and `PotentialConsumption(c, r)`.
+- [ ] Add a `GameView` helper `EfficiencyColor(float e)` implementing §2.3.
+- [ ] Rewrite the inventory block: always-on rows, new format, colored eff %.
+- [ ] Add the efficiency legend line.
+- [ ] Verify: full supply → green, starved → red, half → grey; unused rows still
+      shown as grey "(unused)"; `stock` shows whole units only.
+
+---
+
+## 3. FEATURE C — Production: float math, integer-only output
+### 3.1 Goal
+Production should keep **floating-point** precision internally (so a factory
+running at 50% efficiency really produces 0.5, a speed-up really doubles, etc.),
+but the **player must only ever receive whole units**: fractional output
+accumulates in a buffer and is only released to the inventory as **1 unit at a
+time** once a full unit has been created.
+
+### 3.2 Buffer model (design decision — implement exactly this)
+- New per-company state in `Company.cs`:
+  ```
+  public readonly Dictionary<ResourceType, float> ProductionFraction =
+      new Dictionary<ResourceType, float>();   // one entry per resource, starts 0
+  ```
+  (Initialized in the `Company` constructor alongside `Inventory`.)
+- In `GameSimulator.Produce(Company c)`, when a node would produce `outAmt`
+  (float) of resource `outR`:
+  1. **Consume inputs immediately as floats** (unchanged): a starved factory
+     still burns exactly the inputs it actually converted — no change here.
+  2. **Accumulate output into the buffer**, not straight into inventory:
+     ```
+     c.ProductionFraction[outR] += outAmt;
+     int whole = Mathf.FloorToInt(c.ProductionFraction[outR]);
+     if (whole > 0)
+     {
+         c.ProductionFraction[outR] -= whole;   // keep the fractional remainder
+         c.SetInventory(outR, c.GetInventory(outR) + whole);  // integer units only
+     }
+     ```
+- The **metrics** (`ProducedPerTick`) still report the *actual float rate*
+  (what the factory is doing), so the UI's efficiency % (FEATURE B) stays
+  accurate even though only whole units land in stock.
+- The **tax payment** logic reads inventory; since inventory is now integer-
+  granular, tax take-outs can still be fractional (government takes what it can)
+  — leave tax as-is (Q2: confirm, see questions).
+- The **fraction buffer must reset** on `ResetTaxCycle`? **No** — the buffer is
+  an accumulation of not-yet-released output and should persist across ticks
+  and tax cycles. It only resets on `NewGame()` (new `Company` instances).
+- Cap: the buffer should never exceed 1.0 (it is reduced by `whole` each tick),
+  so it always holds the `0..1` remainder — no unbounded growth.
+
+### 3.3 Interaction with FEATURE B
+- Because stock is now integer-only, `GetInventory` returns whole numbers for
+  player output. Display with `.ToString("0")`.
+- `ProducedPerTick` (float) is the *rate*; the efficiency % uses it — unchanged.
+- Consumption still deducts float inputs; inputs are also "resources the player
+  holds". **Question for user (Q3):** should *inputs* also only be consumed in
+  whole units, or is it fine that inputs burn as fractions while outputs are
+  integer-only? (See questions at the end.)
+
+### 3.4 Tasks
+- [ ] Add `ProductionFraction` dict + init in `Company` constructor.
+- [ ] Rework `Produce()` to buffer output and release whole units only.
+- [ ] Keep input consumption float-accurate (unless Q3 changes this).
+- [ ] Update inventory display to show whole units (already covered by §2.4).
+- [ ] Verify: a 50%-efficiency node does not hand out 0 units per single tick
+      but accumulates 0.5/tick → 1 unit every 2 ticks; speed-ups still 2x rate;
+      tax and trading still function.
+
+---
+
+## 4. Order of work
+1. **C — production buffer** (foundation; changes what `GetInventory` returns,
+   so do it before the UI reads it).
+2. **B — inventory efficiency %** (depends on the new `Potential*` methods and
+   the integer-only stock display).
+3. **A — tax zebra + Shift+click** (pure UI, independent; easiest to slot in last).
+
+## 5. Acceptance checklist
+- [ ] Tax list: rows alternate two grey shades; Shift+▲ jumps to top,
+      Shift+▼ jumps to bottom; plain ▲/▼ still move one step; hint label present.
+- [ ] Inventory: every resource always listed with prod/con rate, stock/limit,
+      and a colored efficiency % (green 100 / grey 50 / red 0, linear scale).
+- [ ] Efficiency legend present.
+- [ ] Production accumulates floats internally but only whole units ever appear
+      in the player's stock (1 unit released per full unit created).
+- [ ] Metrics/efficiency still accurate with the new integer stock.
+- [ ] Tax + trading + RESTART all still work.
+- [ ] GDD hub: add a short **UI/UX + production** note + `[[link]]` to
+      `GameView` / `GameSimulator`.
+
+## 6. Design decisions (RESOLVED unless flagged as a question)
+- Zebra shades: `0.16` (even) / `0.28` (odd) grey, white text.
+- Efficiency anchors: 100%→green, 50%→grey, 0%→red, linear (see §2.3).
+- Output release: floor into integer units, keep fractional remainder in a
+  persistent per-company buffer (see §3.2).
+
+## 7. OPEN QUESTIONS (answer before I start coding)
+1. **Q1 (efficiency color target):** Should the efficiency color tint just the
+   `NN%` token (my default) OR the entire stock number too?
+
+   the intire stock row including the name so that its obsius wich item the player is lacking
+
+2. **Q2 (tax granularity):** With stock now integer-only, should the government
+   still be allowed to take *fractional* units when collecting tax (current
+   behavior), or should tax also only deduct whole units?
+
+   tax can only calculate whole units and therefor only tax whole units save the partial float separatley and store it in the bacground
+   for the next tax cycle without needing to show stock in fractional units to the player but production output and consumption can be 
+   shown in fractional units so that its clear to the player
+
+3. **Q3 (input consumption):** Should *factory inputs* also only be consumed in
+   whole units (e.g. a factory needing 2 Metal + 1 Energy only fires when it has
+   all whole inputs), or is it fine to keep fractional input burn while outputs
+   are integer-only (my default)?
+
+   yes, inputs should also be consumed in whole units so that the player can see the change in their stock 
+   but the production output and consumption can be shown in fractional units so that its clear to the player
+   so lets say inputs are 2 metal 1 power and the player has only 1 metal and 1 power therefor the efficency is 50% and podcution 
+   is 0.5 per tick so 1 every 2 ticks and consumption in reality of metal is 1 and power is 0.5 since it does not need the full power 
+   every tick
+
+4. **Q4 (efficiency for consumed-only resources):** For a raw resource that is
+   only consumed (never produced), I define efficiency as "how well the
+   consuming factories are supplied" (consumed / would-consume-if-full). Confirm
+   that's the intended meaning, or do you want consumed resources to instead show
+   the *producer's* supply efficiency?
+
+   the consumed recource should also show an efficiency of how well the consuming factories are supplied and not the producers
+   supply since the player is only concerned with how well their factories are supplied
+   so if there 0 production but for exsample 2 consumption then its 0% efficiency and warns in red that you need this recource
+   to keep your factories running
+
+5. **Q5 (zebra contrast):** Are the two grey shades (0.16 / 0.28) distinct enough
+   for you, or would you prefer a stronger contrast / a colored tint (e.g. a faint
+   blue vs neutral)?
+
+   the contrast is good enough and the player can see which row is which
