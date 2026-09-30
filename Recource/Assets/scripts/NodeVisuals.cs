@@ -87,6 +87,184 @@ public static class NodeVisuals
         return null;
     }
 
+    // ================= terrain: land + sea (shared by GameView & MenuView) =================
+
+    /// <summary>Land (ground) tiles - a flat grey-green slab, clearly NOT blue.</summary>
+    public static readonly Color LandColor = new Color(0.42f, 0.45f, 0.40f);
+
+    /// <summary>Sea / lake tiles - deep blue, clearly distinct from the grey land.</summary>
+    public static readonly Color SeaColor = new Color(0.08f, 0.28f, 0.55f);
+
+    /// <summary>
+    /// Builds one full terrain cell under <paramref name="parent"/>. If
+    /// <paramref name="isWater"/> the cell is a sea slab with placeholder waves,
+    /// otherwise a flat land slab. The parent should already be at the cell's
+    /// world position. No colliders are left on any of the parts.
+    /// </summary>
+    public static void BuildTerrainCell(Transform parent, float gridSpacing, bool isWater,
+        Color seaColor, Color landColor)
+    {
+        float t = gridSpacing * 0.98f;
+        var slab = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        slab.name = isWater ? "SeaSlab" : "LandSlab";
+        slab.transform.SetParent(parent, false);
+        slab.transform.localScale = new Vector3(t, 0.2f, t);
+        slab.transform.localPosition = Vector3.zero;
+        StripCollider(slab);
+        Tint(slab, isWater ? seaColor : landColor);
+    }
+
+    static void StripCollider(GameObject go)
+    {
+        var c = go.GetComponent<Collider>();
+        if (c != null) Object.Destroy(c);
+    }
+
+    static void Tint(GameObject go, Color c)
+    {
+        var r = go.GetComponent<Renderer>();
+        if (r != null) r.material.color = c;
+    }
+
+    // ---- cached wave parts (built once, shared by every sea tile) ----
+    static Material _waveMat;
+    static Mesh _waveMesh;
+
+    /// <summary>
+    /// Shared wave material: a slightly lighter version of the sea color so
+    /// the strips read as "high water" against the darker slab. Built once per
+    /// sea color and reused by every wave in every tile (cheap).
+    /// </summary>
+    static Material WaveMaterial(Color seaColor)
+    {
+        if (_waveMat == null)
+        {
+            var sh = Shader.Find("Universal Render Pipeline/Lit");
+            if (sh == null) sh = Shader.Find("Standard");
+            _waveMat = new Material(sh);
+        }
+        Color light = new Color(
+            Mathf.Clamp01(seaColor.r * 1.6f),
+            Mathf.Clamp01(seaColor.g * 1.6f),
+            Mathf.Clamp01(seaColor.b * 1.8f),
+            1f);
+        _waveMat.color = light;
+        return _waveMat;
+    }
+
+    /// <summary>
+    /// A rounded "pill" mesh: a capsule lying along its local X axis, radius
+    /// 0.5, body length 1.0 (total length 2.0). Scaled by the caller to set
+    /// wave length/thickness. Generated once and shared.
+    /// </summary>
+    static Mesh MakeWaveMesh()
+    {
+        if (_waveMesh != null) return _waveMesh;
+
+        const int seg = 12;   // longitudinal segments
+        const int rad = 10;   // radial segments
+
+        var verts = new System.Collections.Generic.List<Vector3>();
+        var norms = new System.Collections.Generic.List<Vector3>();
+        var uvs = new System.Collections.Generic.List<Vector2>();
+        var tris = new System.Collections.Generic.List<int>();
+
+        // Build the body (cylinder) first: x in [-0.5, 0.5], circular cross-section r=0.5.
+        for (int i = 0; i <= seg; i++)
+        {
+            float x = -0.5f + i / (float)seg;
+            for (int j = 0; j < rad; j++)
+            {
+                float a = j / (float)rad * Mathf.PI * 2f;
+                verts.Add(new Vector3(x, Mathf.Cos(a) * 0.5f, Mathf.Sin(a) * 0.5f));
+                norms.Add(new Vector3(0f, Mathf.Cos(a), Mathf.Sin(a)));
+                uvs.Add(new Vector2(i / (float)seg, j / (float)rad));
+            }
+        }
+        for (int i = 0; i < seg; i++)
+            for (int j = 0; j < rad; j++)
+            {
+                int a = i * rad + j;
+                int b = i * rad + (j + 1) % rad;
+                int c = (i + 1) * rad + j;
+                int d = (i + 1) * rad + (j + 1) % rad;
+                tris.Add(a); tris.Add(b); tris.Add(c);
+                tris.Add(b); tris.Add(d); tris.Add(c);
+            }
+
+        // Hemisphere caps at x=+0.5 and x=-0.5 (rounded ends).
+        AddHemisphere(verts, norms, uvs, tris, +0.5f, +1);
+        AddHemisphere(verts, norms, uvs, tris, -0.5f, -1);
+
+        _waveMesh = new Mesh();
+        _waveMesh.name = "WavePill";
+        _waveMesh.vertices = verts.ToArray();
+        _waveMesh.normals = norms.ToArray();
+        _waveMesh.uv = uvs.ToArray();
+        _waveMesh.triangles = tris.ToArray();
+        _waveMesh.RecalculateBounds();
+        return _waveMesh;
+    }
+
+    static void AddHemisphere(
+        System.Collections.Generic.List<Vector3> verts,
+        System.Collections.Generic.List<Vector3> norms,
+        System.Collections.Generic.List<Vector2> uvs,
+        System.Collections.Generic.List<int> tris,
+        float x0, int dir)
+    {
+        const int lat = 6;   // latitude segments
+        const int lon = 10;  // longitude segments
+
+        int baseIdx = verts.Count;
+        // Poles first (so the fan indices are stable).
+        int poleA = baseIdx; // at x0 + dir*0.5 (the "tip")
+        int poleB = baseIdx + 1; // at x0 (the seam with the body)
+        verts.Add(new Vector3(x0 + dir * 0.5f, 0f, 0f));
+        norms.Add(new Vector3(dir, 0f, 0f));
+        uvs.Add(new Vector2(0.5f, 0f));
+        verts.Add(new Vector3(x0, 0f, 0f));
+        norms.Add(new Vector3(dir, 0f, 0f));
+        uvs.Add(new Vector2(0f, 0f));
+
+        for (int i = 1; i <= lat; i++)
+        {
+            float th = i / (float)lat * Mathf.PI * 0.5f; // 0..90° from the axis
+            float r = 0.5f * Mathf.Sin(th);
+            float x = x0 + dir * 0.5f * Mathf.Cos(th);
+            for (int j = 0; j < lon; j++)
+            {
+                float a = j / (float)lon * Mathf.PI * 2f;
+                verts.Add(new Vector3(x, Mathf.Cos(a) * r, Mathf.Sin(a) * r));
+                Vector3 n = new Vector3(dir * Mathf.Cos(th), Mathf.Cos(a) * Mathf.Sin(th), Mathf.Sin(a) * Mathf.Sin(th));
+                norms.Add(n.normalized);
+                uvs.Add(new Vector2(i / (float)lat, j / (float)lon));
+            }
+        }
+
+        // Fan from poleA (tip) to the first ring, and from poleB (seam) to the last ring.
+        for (int j = 0; j < lon; j++)
+        {
+            int a = baseIdx + 2 + j;
+            int b = baseIdx + 2 + (j + 1) % lon;
+            tris.Add(poleA); tris.Add(b); tris.Add(a);   // tip cap
+            tris.Add(poleB); tris.Add(a); tris.Add(b);   // seam cap
+        }
+        // Lat-long grid.
+        for (int i = 1; i < lat; i++)
+        {
+            for (int j = 0; j < lon; j++)
+            {
+                int a = baseIdx + 2 + (i - 1) * lon + j;
+                int b = baseIdx + 2 + (i - 1) * lon + (j + 1) % lon;
+                int c = baseIdx + 2 + i * lon + j;
+                int d = baseIdx + 2 + i * lon + (j + 1) % lon;
+                tris.Add(a); tris.Add(b); tris.Add(c);
+                tris.Add(b); tris.Add(d); tris.Add(c);
+            }
+        }
+    }
+
     /// <summary>
     /// Builds the node body under <paramref name="parent"/> (the parent should
     /// already be at the node's map position). Prefab if the slot is filled,

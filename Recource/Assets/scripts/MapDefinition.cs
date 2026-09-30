@@ -22,7 +22,7 @@ public class MapDefinition : ScriptableObject
     public const float GridSpacing = 5f;
 
     [TextArea(6, 20)]
-    [Tooltip("One line per row, top = north. W/M/E/a = raw nodes, C/P/B/F = factories, R = any node, ? = random raw, 0 = water, . = ground.")]
+    [Tooltip("One line per row, top = north. W/M/E/a = raw nodes, C/P/B/F = factories, x = dual raw hub, R = any node, ? = random raw, 0 = water, . = ground.")]
     public string[] rows = new string[0];
 
     public int Rows { get { return rows.Length; } }
@@ -65,10 +65,19 @@ public class MapDefinition : ScriptableObject
     {
         return c == 'W' || c == 'M' || c == 'E' || c == 'a' ||
                c == 'C' || c == 'P' || c == 'B' || c == 'F' ||
-               c == 'R' || c == '?';
+               c == 'R' || c == '?' || c == 'x';
     }
 
     public bool IsWater(char c) { return c == '0'; }
+
+    /// <summary>
+    /// Cells marked with a lowercase 'x' are pinned DUAL-RESOURCE HUBS — they
+    /// always produce two raw resources (the second is rolled from the setup
+    /// mix, seeded). Plain raw cells (W/M/E/a) stay single-resource. The
+    /// Finland map uses 'x' so every non-factory hub is a dual hub regardless
+    /// of the "Dual-resource hub %" setting.
+    /// </summary>
+    public bool IsDualHub(char c) { return c == 'x'; }
 
     public ResourceType? FixedRaw(char c)
     {
@@ -104,11 +113,18 @@ public class MapDefinition : ScriptableObject
         return n;
     }
 
-    /// <summary>World position of a cell center; the grid is centered on (0,0).</summary>
+    /// <summary>
+    /// World position of a cell center; the grid is centered on (0,0).
+    /// Orientation matches the grid text: row 0 is the TOP of the map (north).
+    /// Because the top-down camera looks from -Z toward +Z, "screen up" is
+    /// world +Z, so row 0 must map to the HIGHEST Z. (Previously row 0 mapped
+    /// to the lowest Z, which is why the 3D view appeared upside down relative
+    /// to the grid text.)
+    /// </summary>
     public Vector2 CellCenter(int row, int col)
     {
         return new Vector2((col - (Cols - 1) * 0.5f) * GridSpacing,
-                           (row - (Rows - 1) * 0.5f) * GridSpacing);
+                           ((Rows - 1) * 0.5f - row) * GridSpacing);
     }
 
     public Vector2 ExtentMin() { return new Vector2(0f, 0f); }
@@ -154,3 +170,4 @@ public class MapDefinition : ScriptableObject
         return sb.ToString();
     }
 }
+

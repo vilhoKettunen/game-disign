@@ -22,8 +22,8 @@ public class MenuView : MonoBehaviour
 
     [Header("Live 3D preview")]
     public bool show3DPreview = true;
-    public Color previewWaterColor = new Color(0.14f, 0.26f, 0.42f);
-    public Color previewGroundColor = new Color(0.30f, 0.34f, 0.32f);
+    public Color previewWaterColor = new Color(0.10f, 0.30f, 0.60f);
+    public Color previewGroundColor = new Color(0.45f, 0.45f, 0.45f);
 
     // ---- node prefabs (SAME references as GameView, so the creator shows the
     //      exact models the game uses; empty slot = placeholder shape) ----
@@ -222,26 +222,15 @@ public class MenuView : MonoBehaviour
             {
                 char cell = map.CellAt(r, c);
                 bool water = map.IsWater(cell);
-                if (water)
-                {
-                    var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                    go.name = "PrevWater_" + r + "_" + c;
-                    go.transform.SetParent(previewRoot.transform, false);
-                    go.transform.localScale = new Vector3(g * 0.98f, 0.2f, g * 0.98f);
-                    go.transform.position = new Vector3((c - (map.Cols - 1) * 0.5f) * g, -0.11f, (r - (map.Rows - 1) * 0.5f) * g);
-                    StripCollider(go);
-                    go.GetComponent<Renderer>().sharedMaterial.color = previewWaterColor;
-                }
-                else
-                {
-                    var go = GameObject.CreatePrimitive(PrimitiveType.Plane);
-                    go.name = "PrevGround_" + r + "_" + c;
-                    go.transform.SetParent(previewRoot.transform, false);
-                    go.transform.localScale = new Vector3(0.45f, 0.45f, 0.45f);
-                    go.transform.position = new Vector3((c - (map.Cols - 1) * 0.5f) * g, 0.02f, (r - (map.Rows - 1) * 0.5f) * g);
-                    StripCollider(go);
-                    go.GetComponent<Renderer>().sharedMaterial.color = previewGroundColor;
-                }
+
+                var go = new GameObject((water ? "PrevWater_" : "PrevGround_") + r + "_" + c);
+                go.transform.SetParent(previewRoot.transform, false);
+                Vector2 cc = map.CellCenter(r, c);
+                go.transform.position = new Vector3(cc.x, 0f, cc.y);
+                // Shared land/sea builder (same as GameView): grey land slab or
+                // blue sea slab with placeholder waves on top.
+                NodeVisuals.BuildTerrainCell(go.transform, g, water,
+                    previewWaterColor, previewGroundColor);
             }
         }
     }
@@ -332,8 +321,8 @@ public class MenuView : MonoBehaviour
     /// <summary>One-line brush picker: a button per legend character, current one highlighted.</summary>
     void BrushPicker()
     {
-        char[] brushes = { '.', 'W', 'M', 'E', 'a', 'C', 'P', 'B', 'F', 'R', '?', '0' };
-        string[] tips = { "ground", "wood", "metal", "energy", "water", "chips", "mech", "building", "food", "any", "rand", "WATER" };
+        char[] brushes = { '.', 'W', 'M', 'E', 'a', 'x', 'C', 'P', 'B', 'F', 'R', '?', '0' };
+        string[] tips = { "ground", "wood", "metal", "energy", "water", "dual hub", "chips", "mech", "building", "food", "any", "rand", "WATER" };
         GUILayout.BeginHorizontal();
         for (int i = 0; i < brushes.Length; i++)
         {
@@ -441,7 +430,7 @@ public class MenuView : MonoBehaviour
         GUILayout.Label("SETTINGS  (all editable - map-setup-plan Q5)", Bold());
 
         setup.seed = IntField("Seed (share this to share the map!)", setup.seed, 1, 999999);
-        setup.nodeCountCap = IntField("Node count cap", setup.nodeCountCap, 1, 200);
+        setup.nodeCountCap = IntField("Node count cap", setup.nodeCountCap, 1, 2000);
         setup.dualResourceHubPct = IntField("Dual-resource hub %", setup.dualResourceHubPct, 0, 100);
         setup.companyCount = IntField("Company count (you + AI)", setup.companyCount, 2, 8);
         setup.startingPP = IntField("Starting PP", Mathf.RoundToInt(setup.startingPP), 0, 100000);
@@ -571,7 +560,7 @@ public class MenuView : MonoBehaviour
             GridEditor(map);
             GUILayout.EndScrollView();
             GUILayout.Label("    " + ColumnNumbers(map.Cols), Small());
-            GUILayout.Label("legend: W=Wood M=Metal E=Energy a=Water  C=Chips P=MechParts B=Building F=Food\n        R=any node  ?=random raw  0=water  .=ground", Small());
+            GUILayout.Label("legend: W=Wood M=Metal E=Energy a=Water  x=dual hub  C=Chips P=MechParts B=Building F=Food\n        R=any node  ?=random raw  0=water  .=ground", Small());
         }
         else
         {

@@ -19,7 +19,7 @@ public class GameSetup
 
     // generation
     public int seed = 12345;       // same seed = same random map + node types (shareable!)
-    public int nodeCountCap = 20;
+    public int nodeCountCap = 1000;
     public int dualResourceHubPct = 20;
 
     // type mix (weights, normalized when rolled)

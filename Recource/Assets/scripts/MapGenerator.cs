@@ -71,6 +71,7 @@ public static class MapGenerator
 
         ResourceType? first = null;
         bool factory = false;
+        bool dual = false;
 
         var rawPin = MapDefinitionFixedRaw(cell);
         var refPin = MapDefinitionFixedRefined(cell);
@@ -82,6 +83,12 @@ public static class MapGenerator
         {
             first = refPin;
             factory = true;
+        }
+        else if (cell == 'x')
+        {
+            // Pinned DUAL-RESOURCE HUB (Finland map): always a dual raw hub.
+            first = RollRaw(setup);
+            dual = true;
         }
         else if (cell == 'R')
         {
@@ -96,10 +103,20 @@ public static class MapGenerator
         if (first == null) first = ResourceType.Wood; // safety (unreachable for valid legends)
         n.Produced.Add(first.Value);
 
-        if (!factory && Random.value < setup.dualResourceHubPct / 100f)
+        if (!factory)
         {
-            var other = RollRaw(setup);
-            if (other != first) n.Produced.Add(other);
+            bool shouldDual = dual || (Random.value < setup.dualResourceHubPct / 100f);
+            if (shouldDual)
+            {
+                // Pick a second raw resource different from the first (retry a few
+                // times so a pinned dual hub never silently degrades to a single
+                // resource; falls back to Wood if every roll matched).
+                ResourceType other = RollRaw(setup);
+                for (int tries = 0; tries < 32 && other == first; tries++)
+                    other = RollRaw(setup);
+                if (other == first) other = (first == ResourceType.Wood) ? ResourceType.Metal : ResourceType.Wood;
+                n.Produced.Add(other);
+            }
         }
 
         if (factory)

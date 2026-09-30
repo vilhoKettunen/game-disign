@@ -49,8 +49,8 @@ public class GameView : MonoBehaviour
     [Header("Map Terrain (map-setup-plan Q8)")]
     [Tooltip("Render ground under every non-water cell so the map shape reads (off = nodes only).")]
     public bool renderGround = true;
-    public Color groundColor = new Color(0.30f, 0.34f, 0.32f);
-    public Color waterColor = new Color(0.14f, 0.26f, 0.42f);
+    public Color groundColor = new Color(0.45f, 0.45f, 0.45f);
+    public Color waterColor = new Color(0.10f, 0.30f, 0.60f);
 
     // map generation state (menu -> MapGenerator -> this scene)
     MapDefinition currentMap;
@@ -277,19 +277,15 @@ public class GameView : MonoBehaviour
                     bool water = currentMap.IsWater(cell);
                     if (!water && !renderGround) continue;
 
-                    var go = GameObject.CreatePrimitive(water ? PrimitiveType.Cube : PrimitiveType.Plane);
-                    go.name = (water ? "Water_" : "Ground_") + r + "_" + c;
+                    // Shared land/sea builder (NodeVisuals): a grey land slab or
+                    // a blue sea slab with placeholder "waves" on top. The cell
+                    // parent is the cell center, so the slab surface (local y=+0.1)
+                    // sits at world y = +0.1 and the node models sit right on it.
+                    var go = new GameObject((water ? "Water_" : "Ground_") + r + "_" + c);
                     go.transform.SetParent(parent, false);
-                    if (water)
-                        go.transform.localScale = new Vector3(g * 0.98f, 0.2f, g * 0.98f);
-                    else
-                        go.transform.localScale = new Vector3(0.45f, 0.45f, 0.45f);
-                    go.transform.position = new Vector3(
-                        (c - (currentMap.Cols - 1) * 0.5f) * g,
-                        water ? -0.11f : (water ? 0f : 0.02f),
-                        (r - (currentMap.Rows - 1) * 0.5f) * g);
-                    RemoveCollider(go);
-                    SetColor(go, water ? waterColor : groundColor);
+                    Vector2 cc = currentMap.CellCenter(r, c);
+                    go.transform.position = new Vector3(cc.x, 0f, cc.y);
+                    NodeVisuals.BuildTerrainCell(go.transform, g, water, waterColor, groundColor);
                 }
             }
         }
