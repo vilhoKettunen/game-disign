@@ -607,12 +607,20 @@ public class GameSimulator : MonoBehaviour
     /// <summary>
     /// What a company buyout costs the buyer: the seller's nodes priced at the
     /// buyer's own exponential next-node curve, discounted by config.BuyoutCostFactor
-    /// (bulk deal). The same price applies whether you pay in resources or in PP.
+    /// (bulk deal), PLUS the seller's current Political Power balance.
+    /// The same price applies whether you pay in resources or in PP.
     /// </summary>
     public float BuyoutCost(Company buyer, Company seller)
     {
         if (seller == null) return 0f;
-        return (seller.Nodes.Count * NextNodeCost(buyer)) / config.BuyoutCostFactor;
+        // The seller's PP balance is added on top so a company with accumulated
+        // power is harder to absorb. This also prevents an "insta buy-out" at
+        // the start of the game: a fresh 1-node company's nodes alone are only
+        // (1 * NextNodeCost) / BuyoutCostFactor PP (e.g. ~10 PP), but its
+        // starting PP (400) pushes the total above what the buyer can pay on
+        // turn one, so you have to play a few turns before a buyout is possible.
+        float baseCost = (seller.Nodes.Count * NextNodeCost(buyer)) / config.BuyoutCostFactor;
+        return baseCost + seller.PoliticalPower;
     }
 
     /// <summary>

@@ -692,7 +692,8 @@ public class GameView : MonoBehaviour
             {
                 float need = S.BuyoutCost(S.Player, seller);
                 GUILayout.Label("Company value: " + need.ToString("0") + " PP  ("
-                    + seller.Nodes.Count + " node" + (seller.Nodes.Count > 1 ? "s" : "") + ", bulk deal)", Bold);
+                    + seller.Nodes.Count + " node" + (seller.Nodes.Count > 1 ? "s" : "")
+                    + " + " + seller.PoliticalPower.ToString("0") + " PP balance)", Bold);
 
                 // ---- option 1: pay directly with earned Political Power ----
                 GUILayout.Label("BUY OUT WITH PP:", Bold);
@@ -1260,7 +1261,7 @@ public class GameView : MonoBehaviour
             + S.config.NodeCostGrowthMult.ToString("0.00") + ")^nodes you own  - exponential, e.g. ~1x, ~1.4x, ~3x, ~10x, ~20x");
         GUILayout.Label("   Government node:  costs you that next-node price (PP) - SAME as buying a rival's node, so no loophole");
         GUILayout.Label("   Company node:     offer resources worth MORE than that next-node price, at today's prices");
-        GUILayout.Label("   Company buyout:   cost = N x that price / " + S.config.BuyoutCostFactor.ToString("0") + " (N = its node count)");
+        GUILayout.Label("   Company buyout:   cost = N x that price / " + S.config.BuyoutCostFactor.ToString("0") + " + the seller's PP balance (N = its node count)");
         GUILayout.Label("                    pay it in PP directly, or offer resources worth MORE than the cost");
         GUILayout.Label("   Trades:           accepted only when you offer MORE value (PP) than you request");
     }
