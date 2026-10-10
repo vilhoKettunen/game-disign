@@ -123,7 +123,32 @@ public static class NodeVisuals
     static void Tint(GameObject go, Color c)
     {
         var r = go.GetComponent<Renderer>();
-        if (r != null) r.material.color = c;
+        if (r == null) return;
+        // Ensure a valid URP material (CreatePrimitive uses the built-in "Default"
+        // material which renders pink/magenta in URP builds).
+        r.sharedMaterial = LitMaterial();
+        r.material.color = c;
+    }
+
+    // ---- shared URP Lit material (loaded from Resources so it works in builds) ----
+    static Material _litMat;
+
+    /// <summary>
+    /// Returns a shared URP Lit material. Uses Resources.Load (works in builds
+    /// where Shader.Find returns null for URP shaders), falling back to
+    /// Shader.Find for editor-only use.
+    /// </summary>
+    public static Material LitMaterial()
+    {
+        if (_litMat != null) return _litMat;
+        _litMat = Resources.Load<Material>("lit");
+        if (_litMat == null)
+        {
+            var sh = Shader.Find("Universal Render Pipeline/Lit");
+            if (sh == null) sh = Shader.Find("Standard");
+            _litMat = new Material(sh);
+        }
+        return _litMat;
     }
 
     // ---- cached wave parts (built once, shared by every sea tile) ----
@@ -139,9 +164,8 @@ public static class NodeVisuals
     {
         if (_waveMat == null)
         {
-            var sh = Shader.Find("Universal Render Pipeline/Lit");
-            if (sh == null) sh = Shader.Find("Standard");
-            _waveMat = new Material(sh);
+            // Clone the shared lit material so it has its own color slot.
+            _waveMat = new Material(LitMaterial());
         }
         Color light = new Color(
             Mathf.Clamp01(seaColor.r * 1.6f),
@@ -326,19 +350,18 @@ public static class NodeVisuals
         var labelGo = new GameObject("NodeLabel");
         labelGo.transform.SetParent(parent, false);
         labelGo.transform.localPosition = new Vector3(0f, LabelHeight, 0f);
-        // Aim the label so it reads correctly from the top-down camera.
-        // TextMesh local axes: front = +Z (where the letters are), top = +Y,
-        // right (end of line) = +X. The camera (CameraController) sits on the
-        // -Z side looking toward +Z, so on screen: up = +Z, right = -X.
-        // LookRotation(forward=+Y, up=+Z) gives:
-        //   front -> +Y  (up toward the camera: we see the letters, not a mirror)
-        //   top   -> +Z  (screen-up: tops of the letters point up)
-        //   right -> -X  (screen-right: letters read left-to-right)
-        // The previous -90°-around-X rotation left the text rotated 180° in-plane
-        // (top down, right on the left), i.e. upside down - which is why a "W"
-        // read like an "M". This is the 180° flip that fixes it.
-        labelGo.transform.localRotation =
-            Quaternion.LookRotation(Vector3.up, new Vector3(0f, 0f, 1f));
+        // Orientation: a TextMesh is single-sided - its READABLE face is local
+        // +Z and the -Z side is the mirror image. A fixed hardcoded rotation
+        // (e.g. 180° about (0,1,1)) only reads correctly for ONE camera side;
+        // from the opposite side you see the mirrored back face (text reads
+        // right-to-left), which is exactly the bug this replaced.
+        //
+        // Instead we face the label at the ACTIVE camera every frame (NodeLabel
+        // Billboard), so the readable face always points at whatever camera is
+        // looking at it - the game's top-down camera, the map-creator preview,
+        // or wherever the user has rotated the editor view. It can never be
+        // mirrored because we always show the front face.
+        labelGo.AddComponent<NodeLabelBillboard>();
         var tm = labelGo.AddComponent<TextMesh>();
         // Unity 6: "Arial.ttf" is no longer a valid built-in font -> use "LegacyRuntime.ttf"
         var f = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
